@@ -28,10 +28,10 @@ void RobotPlugPlay_PrintConfig(void)
         {ROBOT_PLUGPLAY_USE_SOLENOID4_ADC, "Solenoid sensor 4", SOLENOID_SENSOR_4_PIN_LABEL},
         {ROBOT_PLUGPLAY_USE_SOLENOID5_ADC, "Solenoid sensor 5", SOLENOID_SENSOR_5_PIN_LABEL},
         {ROBOT_PLUGPLAY_USE_SOLENOID6_ADC, "Solenoid sensor 6", SOLENOID_SENSOR_6_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_BUMP1_ADC, "Bump sensor 1", BUMP_SENSOR_1_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_BUMP2_ADC, "Bump sensor 2", BUMP_SENSOR_2_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_BUMP3_ADC, "Bump sensor 3", BUMP_SENSOR_3_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_BUMP4_ADC, "Bump sensor 4", BUMP_SENSOR_4_PIN_LABEL},
+        {ROBOT_PLUGPLAY_USE_BUMP1, "Bump sensor 1", BUMP_SENSOR_1_PIN_LABEL},
+        {ROBOT_PLUGPLAY_USE_BUMP2, "Bump sensor 2", BUMP_SENSOR_2_PIN_LABEL},
+        {ROBOT_PLUGPLAY_USE_BUMP3, "Bump sensor 3", BUMP_SENSOR_3_PIN_LABEL},
+        {ROBOT_PLUGPLAY_USE_BUMP4, "Bump sensor 4", BUMP_SENSOR_4_PIN_LABEL},
         {ROBOT_PLUGPLAY_USE_DRIVE_MOTORS, "Mecanum drive motors", "FL: " MOTOR_FL_PIN_LABEL ", FR: " MOTOR_FR_PIN_LABEL ", RL: " MOTOR_RL_PIN_LABEL ", RR: " MOTOR_RR_PIN_LABEL},
         {ROBOT_PLUGPLAY_USE_LAUNCHER_SERVO, "Launcher angle servo", LAUNCHER_SERVO_PIN_LABEL},
         {ROBOT_PLUGPLAY_USE_SHOOTER_MOTOR, "Shooter motor", SHOOTER_MOTOR_PIN_LABEL},
@@ -90,17 +90,17 @@ uint8_t RobotPlugPlay_IsSolenoidADCEnabled(uint8_t sensorNumber)
     }
 }
 
-uint8_t RobotPlugPlay_IsBumpADCEnabled(uint8_t sensorNumber)
+uint8_t RobotPlugPlay_IsBumpEnabled(uint8_t sensorNumber)
 {
     switch (sensorNumber) {
     case 1:
-        return ROBOT_PLUGPLAY_USE_BUMP1_ADC;
+        return ROBOT_PLUGPLAY_USE_BUMP1;
     case 2:
-        return ROBOT_PLUGPLAY_USE_BUMP2_ADC;
+        return ROBOT_PLUGPLAY_USE_BUMP2;
     case 3:
-        return ROBOT_PLUGPLAY_USE_BUMP3_ADC;
+        return ROBOT_PLUGPLAY_USE_BUMP3;
     case 4:
-        return ROBOT_PLUGPLAY_USE_BUMP4_ADC;
+        return ROBOT_PLUGPLAY_USE_BUMP4;
     default:
         return FALSE;
     }

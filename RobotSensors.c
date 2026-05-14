@@ -7,7 +7,8 @@
 
 static uint16_t TapeDigitalPin(TapeSensor_t sensor);
 static unsigned int SolenoidADPin(SolenoidSensor_t sensor);
-static unsigned int BumpADPin(BumpSensor_t sensor);
+static uint8_t BumpDigitalPort(BumpSensor_t sensor);
+static uint16_t BumpDigitalPin(BumpSensor_t sensor);
 static uint8_t IsThresholdActive(uint16_t reading, uint16_t threshold, uint8_t activeHigh);
 
 uint8_t RobotSensors_Init(void)
@@ -38,17 +39,11 @@ uint8_t RobotSensors_Init(void)
 #if ROBOT_PLUGPLAY_USE_SOLENOID6_ADC
     pins |= SOLENOID_SENSOR_6_ADC_PIN;
 #endif
-#if ROBOT_PLUGPLAY_USE_BUMP1_ADC
-    pins |= BUMP_SENSOR_1_ADC_PIN;
+#if ROBOT_PLUGPLAY_USE_BUMP1 || ROBOT_PLUGPLAY_USE_BUMP2 || ROBOT_PLUGPLAY_USE_BUMP3
+    IO_PortsSetPortInputs(PORTW, BUMP_SENSOR_PORTW_PINS);
 #endif
-#if ROBOT_PLUGPLAY_USE_BUMP2_ADC
-    pins |= BUMP_SENSOR_2_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_BUMP3_ADC
-    pins |= BUMP_SENSOR_3_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_BUMP4_ADC
-    pins |= BUMP_SENSOR_4_ADC_PIN;
+#if ROBOT_PLUGPLAY_USE_BUMP4
+    IO_PortsSetPortInputs(PORTV, BUMP_SENSOR_4_PIN);
 #endif
 #if ROBOT_PLUGPLAY_USE_SHOOTER_ADC
     pins |= SHOOTER_MOTOR_ADC_PIN;
@@ -86,10 +81,17 @@ uint16_t RobotSensors_ReadSolenoidADC(SolenoidSensor_t sensor)
             AD_ReadADPin(SolenoidADPin(sensor)) : 0u;
 }
 
-uint16_t RobotSensors_ReadBumpADC(BumpSensor_t sensor)
+uint8_t RobotSensors_ReadBumpDigital(BumpSensor_t sensor)
 {
-    return RobotPlugPlay_IsBumpADCEnabled((uint8_t) sensor) ?
-            AD_ReadADPin(BumpADPin(sensor)) : 0u;
+    uint8_t port;
+    uint16_t pin;
+
+    if (RobotPlugPlay_IsBumpEnabled((uint8_t) sensor) == FALSE) {
+        return 0u;
+    }
+    port = BumpDigitalPort(sensor);
+    pin = BumpDigitalPin(sensor);
+    return (IO_PortsReadPort(port) & pin) ? 1u : 0u;
 }
 
 uint16_t RobotSensors_ReadShooterMotorADC(void)
@@ -123,11 +125,13 @@ uint8_t RobotSensors_IsSolenoidOn(SolenoidSensor_t sensor)
 
 uint8_t RobotSensors_IsBumpOn(BumpSensor_t sensor)
 {
-    if (RobotPlugPlay_IsBumpADCEnabled((uint8_t) sensor) == FALSE) {
+    uint8_t reading;
+
+    if (RobotPlugPlay_IsBumpEnabled((uint8_t) sensor) == FALSE) {
         return FALSE;
     }
-    return IsThresholdActive(RobotSensors_ReadBumpADC(sensor),
-            BUMP_ON_ADC_THRESHOLD, BUMP_ON_IS_HIGH);
+    reading = RobotSensors_ReadBumpDigital(sensor);
+    return BUMP_ON_IS_HIGH ? (reading != 0u) : (reading == 0u);
 }
 
 static uint16_t TapeDigitalPin(TapeSensor_t sensor)
@@ -168,19 +172,35 @@ static unsigned int SolenoidADPin(SolenoidSensor_t sensor)
     }
 }
 
-static unsigned int BumpADPin(BumpSensor_t sensor)
+static uint8_t BumpDigitalPort(BumpSensor_t sensor)
 {
     switch (sensor) {
     case BUMP_SENSOR_1:
-        return BUMP_SENSOR_1_ADC_PIN;
+        return BUMP_SENSOR_1_PORT;
     case BUMP_SENSOR_2:
-        return BUMP_SENSOR_2_ADC_PIN;
+        return BUMP_SENSOR_2_PORT;
     case BUMP_SENSOR_3:
-        return BUMP_SENSOR_3_ADC_PIN;
+        return BUMP_SENSOR_3_PORT;
     case BUMP_SENSOR_4:
-        return BUMP_SENSOR_4_ADC_PIN;
+        return BUMP_SENSOR_4_PORT;
     default:
-        return BUMP_SENSOR_1_ADC_PIN;
+        return BUMP_SENSOR_1_PORT;
+    }
+}
+
+static uint16_t BumpDigitalPin(BumpSensor_t sensor)
+{
+    switch (sensor) {
+    case BUMP_SENSOR_1:
+        return BUMP_SENSOR_1_PIN;
+    case BUMP_SENSOR_2:
+        return BUMP_SENSOR_2_PIN;
+    case BUMP_SENSOR_3:
+        return BUMP_SENSOR_3_PIN;
+    case BUMP_SENSOR_4:
+        return BUMP_SENSOR_4_PIN;
+    default:
+        return 0u;
     }
 }
 

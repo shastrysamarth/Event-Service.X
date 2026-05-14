@@ -256,7 +256,7 @@ uint8_t CheckBumpEvents(void)
     uint8_t i;
     uint8_t current;
 
-#if !ROBOT_PLUGPLAY_USE_ANY_BUMP_ADC
+#if !ROBOT_PLUGPLAY_USE_ANY_BUMP
     return FALSE;
 #endif
 

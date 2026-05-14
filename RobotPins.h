@@ -68,11 +68,19 @@
 #define SOLENOID_SENSOR_5_ADC_PIN AD_PORTV7
 #define SOLENOID_SENSOR_6_ADC_PIN AD_PORTV8
 
-/* [FLAG][#1] Replace these bump ADC placeholders with final wiring or mux channels. */
-#define BUMP_SENSOR_1_ADC_PIN AD_PORTW3
-#define BUMP_SENSOR_2_ADC_PIN AD_PORTW4
-#define BUMP_SENSOR_3_ADC_PIN AD_PORTW5
-#define BUMP_SENSOR_4_ADC_PIN AD_PORTW7
+/* Bump sensors: digital inputs, active-low (pull-up to 3.3V, switch to GND).
+ * Bumps 1-3 share PORTW; bump 4 is on PORTV PIN8. */
+#define BUMP_SENSOR_1_PORT PORTW
+#define BUMP_SENSOR_1_PIN  PIN3
+#define BUMP_SENSOR_2_PORT PORTW
+#define BUMP_SENSOR_2_PIN  PIN4
+#define BUMP_SENSOR_3_PORT PORTW
+#define BUMP_SENSOR_3_PIN  PIN5
+#define BUMP_SENSOR_4_PORT PORTV
+#define BUMP_SENSOR_4_PIN  PIN8
+#define BUMP_SENSOR_PORTW_PINS (PIN3 | PIN4 | PIN5)
+/* Active level: 1 = pin HIGH when bump pressed, 0 = pin LOW when bump pressed. */
+#define BUMP_ON_IS_HIGH 0
 
 /* [FLAG][#1] Confirm if this is really an ADC command input; shooter motor output uses PWM below. */
 #define SHOOTER_MOTOR_ADC_PIN AD_PORTW5
@@ -81,21 +89,15 @@
     SOLENOID_SENSOR_2_ADC_PIN | SOLENOID_SENSOR_3_ADC_PIN | \
     SOLENOID_SENSOR_4_ADC_PIN | SOLENOID_SENSOR_5_ADC_PIN | \
     SOLENOID_SENSOR_6_ADC_PIN)
-#define BUMP_SENSOR_ADC_PINS (BUMP_SENSOR_1_ADC_PIN | BUMP_SENSOR_2_ADC_PIN | \
-    BUMP_SENSOR_3_ADC_PIN | BUMP_SENSOR_4_ADC_PIN)
 
 #define ALL_ROBOT_ADC_PINS (BEACON_ADC_PIN | SOLENOID_SENSOR_1_ADC_PIN | \
     SOLENOID_SENSOR_2_ADC_PIN | SOLENOID_SENSOR_3_ADC_PIN | \
     SOLENOID_SENSOR_4_ADC_PIN | SOLENOID_SENSOR_5_ADC_PIN | \
-    SOLENOID_SENSOR_6_ADC_PIN | BUMP_SENSOR_1_ADC_PIN | \
-    BUMP_SENSOR_2_ADC_PIN | BUMP_SENSOR_3_ADC_PIN | BUMP_SENSOR_4_ADC_PIN | \
-    SHOOTER_MOTOR_ADC_PIN)
+    SOLENOID_SENSOR_6_ADC_PIN | SHOOTER_MOTOR_ADC_PIN)
 
-/* [FLAG][#1] Confirm whether solenoid / bump active sensors read high. */
+/* [FLAG][#1] Confirm whether solenoid active sensors read high. */
 #define SOLENOID_ON_ADC_THRESHOLD 700u
 #define SOLENOID_ON_IS_HIGH 1
-#define BUMP_ON_ADC_THRESHOLD 700u
-#define BUMP_ON_IS_HIGH 1
 #define BEACON_ADC_DELTA 20u
 
 /* [FLAG][#1] Replace all motor PWM and L298 direction placeholders with final Uno32 stack pins. */
@@ -172,10 +174,10 @@
 #define SOLENOID_SENSOR_4_PIN_LABEL "V6 analog input"
 #define SOLENOID_SENSOR_5_PIN_LABEL "V7 analog input"
 #define SOLENOID_SENSOR_6_PIN_LABEL "V8 analog input"
-#define BUMP_SENSOR_1_PIN_LABEL "W3 analog input"
-#define BUMP_SENSOR_2_PIN_LABEL "W4 analog input"
-#define BUMP_SENSOR_3_PIN_LABEL "W5 analog input"
-#define BUMP_SENSOR_4_PIN_LABEL "W7 analog input"
+#define BUMP_SENSOR_1_PIN_LABEL "W3 digital input"
+#define BUMP_SENSOR_2_PIN_LABEL "W4 digital input"
+#define BUMP_SENSOR_3_PIN_LABEL "W5 digital input"
+#define BUMP_SENSOR_4_PIN_LABEL "V8 digital input"
 #define MOTOR_FL_PIN_LABEL "PWM Z6, DIR X3/X4"
 #define MOTOR_FR_PIN_LABEL "PWM Y12, DIR X5/X6"
 #define MOTOR_RL_PIN_LABEL "PWM Y10, DIR X7/X8"
