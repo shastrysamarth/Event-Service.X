@@ -104,7 +104,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             RobotMotion_StrafeLeft(MOTOR_SPEED_IPS);
             LatchInitialStrafeYRefOnce();
             break;
-        case TapeSensor2On3OffEvent:
+        case TapeSensor2OnEvent:
             SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
             num_tapes_crossed = 0u;
             nextState = Reverse1State;
@@ -129,7 +129,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             RobotMotion_StrafeRight(MOTOR_SPEED_IPS);
             LatchInitialStrafeYRefOnce();
             break;
-        case TapeSensor2On4OffEvent:
+        case TapeSensor2OnEvent:
             SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
             num_tapes_crossed = 0u;
             nextState = Reverse1State;
@@ -169,7 +169,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
-        case TapeSensor2Off3OnEvent:
+        case TapeSensor3OnEvent:
             if (IsBottom()) {
                 RobotMotion_Stop();
                 RobotIMU_ZeroPositionVelocity();
@@ -179,7 +179,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
-        case TapeSensor2Off4OnEvent:
+        case TapeSensor4OnEvent:
             if (IsTop()) {
                 RobotMotion_Stop();
                 RobotIMU_ZeroPositionVelocity();

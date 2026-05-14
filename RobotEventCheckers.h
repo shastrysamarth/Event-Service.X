@@ -8,7 +8,6 @@ void InitRobotEventCheckers(void);
 uint8_t CheckRobotPeriodic(void);
 uint8_t CheckBeaconEvents(void);
 uint8_t CheckTapeEvents(void);
-uint8_t CheckCompoundNavigationEvents(void);
 uint8_t CheckSolenoidEvents(void);
 uint8_t CheckBumpEvents(void);
 uint8_t CheckMisalignment(void);

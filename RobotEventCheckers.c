@@ -18,10 +18,6 @@ typedef struct {
     uint8_t tape[5];
     uint8_t solenoid[6];
     uint8_t bump[4];
-    uint8_t tape2On3Off;
-    uint8_t tape2On4Off;
-    uint8_t tape2Off3On;
-    uint8_t tape2Off4On;
     uint8_t misaligned;
 } SensorSnapshot_t;
 
@@ -54,10 +50,6 @@ void InitRobotEventCheckers(void)
         last.bump[i] = RobotSensors_IsBumpOn((BumpSensor_t) (i + 1u));
     }
 
-    last.tape2On3Off = FALSE;
-    last.tape2On4Off = FALSE;
-    last.tape2Off3On = FALSE;
-    last.tape2Off4On = FALSE;
     last.misaligned = FALSE;
 
     lastBeaconADC = RobotSensors_ReadBeaconADC();
@@ -125,44 +117,6 @@ uint8_t CheckBeaconEvents(void)
     }
 
     lastBeaconADC = current;
-    return FALSE;
-}
-
-uint8_t CheckCompoundNavigationEvents(void)
-{
-    uint8_t tape2 = RobotSensors_IsTapeOn(TAPE_SENSOR_2);
-    uint8_t tape3 = RobotSensors_IsTapeOn(TAPE_SENSOR_3);
-    uint8_t tape4 = RobotSensors_IsTapeOn(TAPE_SENSOR_4);
-    uint8_t current;
-
-#if !ROBOT_PLUGPLAY_USE_ANY_TAPE
-    return FALSE;
-#endif
-
-    if (initialized == FALSE) {
-        InitRobotEventCheckers();
-    }
-
-    current = (tape2 && !tape3) ? TRUE : FALSE;
-    if (PostOnRising(current, &last.tape2On3Off, TapeSensor2On3OffEvent, 0u)) {
-        return TRUE;
-    }
-
-    current = (tape2 && !tape4) ? TRUE : FALSE;
-    if (PostOnRising(current, &last.tape2On4Off, TapeSensor2On4OffEvent, 0u)) {
-        return TRUE;
-    }
-
-    current = (!tape2 && tape3) ? TRUE : FALSE;
-    if (PostOnRising(current, &last.tape2Off3On, TapeSensor2Off3OnEvent, 0u)) {
-        return TRUE;
-    }
-
-    current = (!tape2 && tape4) ? TRUE : FALSE;
-    if (PostOnRising(current, &last.tape2Off4On, TapeSensor2Off4OnEvent, 0u)) {
-        return TRUE;
-    }
-
     return FALSE;
 }
 

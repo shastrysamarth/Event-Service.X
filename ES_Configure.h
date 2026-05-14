@@ -39,38 +39,33 @@ typedef enum {
     /* key 'l' */ TapeSensor5OffEvent,
     /* key 'm' */ TapeSensor5LowToHighEvent,
 
-    /* key 'n' */ TapeSensor2On3OffEvent,
-    /* key 'o' */ TapeSensor2On4OffEvent,
-    /* key 'p' */ TapeSensor2Off3OnEvent,
-    /* key 'q' */ TapeSensor2Off4OnEvent,
+    /* key 'n' */ Solenoid1OnEvent,
+    /* key 'o' */ Solenoid2OnEvent,
+    /* key 'p' */ Solenoid3OnEvent,
+    /* key 'q' */ Solenoid4OnEvent,
+    /* key 'r' */ Solenoid5OnEvent,
+    /* key 's' */ Solenoid6OnEvent,
 
-    /* key 'r' */ Solenoid1OnEvent,
-    /* key 's' */ Solenoid2OnEvent,
-    /* key 't' */ Solenoid3OnEvent,
-    /* key 'u' */ Solenoid4OnEvent,
-    /* key 'v' */ Solenoid5OnEvent,
-    /* key 'w' */ Solenoid6OnEvent,
+    /* key 't' */ BumpSensor1OnEvent,
+    /* key 'u' */ BumpSensor1OffEvent,
+    /* key 'v' */ BumpSensor2OnEvent,
+    /* key 'w' */ BumpSensor2OffEvent,
+    /* key 'x' */ BumpSensor3OnEvent,
+    /* key 'y' */ BumpSensor3OffEvent,
+    /* key 'z' */ BumpSensor4OnEvent,
 
-    /* key 'x' */ BumpSensor1OnEvent,
-    /* key 'y' */ BumpSensor1OffEvent,
-    /* key 'z' */ BumpSensor2OnEvent,
+    /* key 'A' */ BumpSensor4OffEvent,
 
-    /* key 'A' */ BumpSensor2OffEvent,
-    /* key 'B' */ BumpSensor3OnEvent,
-    /* key 'C' */ BumpSensor3OffEvent,
-    /* key 'D' */ BumpSensor4OnEvent,
-    /* key 'E' */ BumpSensor4OffEvent,
+    /* key 'B' */ MisalignedEvent,
+    /* key 'C' */ PositionRealignedEvent, /* DEPRECATED: position-align removed; retained for harness / legacy. */
+    /* key 'D' */ RealignedEvent,
+    /* key 'E' */ DistanceMoveCompleteEvent,
 
-    /* key 'F' */ MisalignedEvent,
-    /* key 'G' */ PositionRealignedEvent, /* DEPRECATED: position-align removed; retained for harness / legacy. */
-    /* key 'H' */ RealignedEvent,
-    /* key 'I' */ DistanceMoveCompleteEvent,
-
-    /* key 'J' */ FoundFrontTapeEvent,
-    /* key 'K' */ ReachedISZEvent,
-    /* key 'L' */ InsideISZEvent,
-    /* key 'M' */ SetEvent,
-    /* key 'N' */ DoneEvent,
+    /* key 'F' */ FoundFrontTapeEvent,
+    /* key 'G' */ ReachedISZEvent,
+    /* key 'H' */ InsideISZEvent,
+    /* key 'I' */ SetEvent,
+    /* key 'J' */ DoneEvent,
 
     NUMBEROFEVENTS,
 } ES_EventTyp_t;
@@ -99,10 +94,6 @@ static const char *EventNames[] = {
     "TapeSensor5OnEvent",
     "TapeSensor5OffEvent",
     "TapeSensor5LowToHighEvent",
-    "TapeSensor2On3OffEvent",
-    "TapeSensor2On4OffEvent",
-    "TapeSensor2Off3OnEvent",
-    "TapeSensor2Off4OnEvent",
     "Solenoid1OnEvent",
     "Solenoid2OnEvent",
     "Solenoid3OnEvent",
@@ -131,7 +122,7 @@ static const char *EventNames[] = {
 
 #define EVENT_CHECK_HEADER "RobotEventCheckers.h"
 #define EVENT_CHECK_LIST CheckRobotPeriodic, CheckBeaconEvents, \
-    CheckCompoundNavigationEvents, CheckTapeEvents, CheckSolenoidEvents, \
+    CheckTapeEvents, CheckSolenoidEvents, \
     CheckBumpEvents, CheckDistanceMove, CheckAlignEvents, CheckMisalignment
 
 #define TIMER_UNUSED ((pPostFunc)0)
