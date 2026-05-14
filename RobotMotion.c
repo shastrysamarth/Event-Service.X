@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <xc.h>
 
+#include "ES_Timers.h"
 #include "IO_Ports.h"
-#include "RobotIMU.h"
 #include "RobotPins.h"
 #include "RobotPlugPlay.h"
 #include "pwm.h"
@@ -19,7 +19,11 @@ typedef enum {
 static uint8_t distanceMoveActive = FALSE;
 static DistanceAxis_t distanceAxis = DISTANCE_AXIS_Y;
 static int8_t distanceDirection = 1;
+/* DEPRECATED for open-loop timing: was IMU odometry target; kept for debug getters. */
 static float distanceTargetInches = 0.0f;
+/* Open-loop distance: elapsed ms vs (inches / MOTOR_SPEED_IPS) * 1000 */
+static uint32_t distanceStartMs = 0u;
+static uint32_t distanceDurationMs = 0u;
 
 static void ConfigureDirectionPins(void);
 static uint8_t EnsurePWMReady(void);
@@ -98,10 +102,20 @@ void RobotMotion_TurnRightAbout(TurnPivot_t pivot, float speedIPS)
 
 void RobotMotion_StartDistanceMove(DistanceAxis_t axis, int8_t direction, float targetInches)
 {
+    float durationFloat;
+
     distanceMoveActive = TRUE;
     distanceAxis = axis;
     distanceDirection = (direction >= 0) ? 1 : -1;
     distanceTargetInches = targetInches;
+
+    /* Chassis translation time from nominal MOTOR_SPEED_IPS (same as Forward/Reverse in nav). */
+    durationFloat = (targetInches / MOTOR_SPEED_IPS) * 1000.0f;
+    if (durationFloat < 1.0f) {
+        durationFloat = 1.0f;
+    }
+    distanceDurationMs = (uint32_t) (durationFloat + 0.5f);
+    distanceStartMs = ES_Timer_GetTime();
 }
 
 void RobotMotion_StopDistanceMove(void)
@@ -116,19 +130,16 @@ uint8_t RobotMotion_IsDistanceMoveActive(void)
 
 uint8_t RobotMotion_IsDistanceMoveComplete(void)
 {
-    float travelled;
+    uint32_t now;
+    uint32_t elapsed;
 
     if (distanceMoveActive == FALSE) {
         return FALSE;
     }
 
-    if (distanceAxis == DISTANCE_AXIS_X) {
-        travelled = RobotIMU_GetXInches();
-    } else {
-        travelled = RobotIMU_GetYInches();
-    }
-
-    if (((float) distanceDirection * travelled) >= distanceTargetInches) {
+    now = ES_Timer_GetTime();
+    elapsed = now - distanceStartMs;
+    if (elapsed >= distanceDurationMs) {
         distanceMoveActive = FALSE;
         return TRUE;
     }

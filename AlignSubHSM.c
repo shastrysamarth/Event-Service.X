@@ -8,7 +8,7 @@
 
 typedef enum {
     InitPAlignState,
-    PositionAlignState,
+    PositionAlignState, /* DEPRECATED: not entered in active heading-only flow */
     HeadingAlignState,
 } AlignState_t;
 
@@ -20,8 +20,10 @@ static const char *StateNames[] = {
 
 static AlignState_t CurrentState = InitPAlignState;
 static MovementAxis_t alignAxis = MOVEMENT_AXIS_HORIZONTAL;
+/* DEPRECATED: IMU position refs; Init still sets these for debug / Navigate x_ref,y_ref. */
 static float xRef = 0.0f;
 static float yRef = 0.0f;
+/* DEPRECATED: was used for stable position-align samples */
 static uint8_t positionAlignedSamples = 0u;
 static uint8_t headingAlignedSamples = 0u;
 
@@ -54,13 +56,15 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
     switch (CurrentState) {
     case InitPAlignState:
         if (ThisEvent.EventType == ES_INIT) {
-            nextState = PositionAlignState;
+            /* Active flow: skip DEPRECATED PositionAlignState; align heading only. */
+            nextState = HeadingAlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
         }
         break;
 
     case PositionAlignState:
+        /* DEPRECATED: entire state machine branch retained (unreachable in normal run). */
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             AlignSubHSM_UpdateControl();
@@ -84,6 +88,10 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             AlignSubHSM_UpdateControl();
+            break;
+        case PositionRealignedEvent:
+            /* DEPRECATED event if posted while in heading-only mode */
+            ThisEvent.EventType = ES_NO_EVENT;
             break;
         case RealignedEvent:
             RobotMotion_Stop();
@@ -115,6 +123,7 @@ uint8_t AlignSubHSM_IsActive(void)
 
 uint8_t AlignSubHSM_IsPositionStage(void)
 {
+    /* DEPRECATED: always false once Init skips to heading-only. */
     return (CurrentState == PositionAlignState) ? TRUE : FALSE;
 }
 
@@ -127,7 +136,17 @@ void AlignSubHSM_UpdateControl(void)
 {
     float error;
 
-    if (CurrentState == PositionAlignState) {
+    if (CurrentState == HeadingAlignState) {
+        error = RobotIMU_GetHeadingErrorToZeroDeg();
+        if (AbsFloat(error) <= HEADING_THRESHOLD_DEG) {
+            RobotMotion_Stop();
+        } else if (error > 0.0f) {
+            RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+        } else {
+            RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+        }
+    } else if (CurrentState == PositionAlignState) {
+        /* DEPRECATED: IMU position servo (retained, not used in active flow). */
         if (alignAxis == MOVEMENT_AXIS_HORIZONTAL) {
             error = yRef - RobotIMU_GetYInches();
             if (AbsFloat(error) <= POSITION_THRESHOLD_IN) {
@@ -147,15 +166,6 @@ void AlignSubHSM_UpdateControl(void)
                 RobotMotion_StrafeLeft(ALIGN_SPEED_IPS);
             }
         }
-    } else if (CurrentState == HeadingAlignState) {
-        error = RobotIMU_GetHeadingErrorToZeroDeg();
-        if (AbsFloat(error) <= HEADING_THRESHOLD_DEG) {
-            RobotMotion_Stop();
-        } else if (error > 0.0f) {
-            RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
-        } else {
-            RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
-        }
     }
 }
 
@@ -163,6 +173,7 @@ uint8_t AlignSubHSM_IsPositionAligned(void)
 {
     float error;
 
+    /* DEPRECATED: no longer used for align completion. */
     if (alignAxis == MOVEMENT_AXIS_HORIZONTAL) {
         error = yRef - RobotIMU_GetYInches();
     } else {
@@ -201,6 +212,7 @@ float AlignSubHSM_GetYRef(void)
 
 float AlignSubHSM_GetPositionError(void)
 {
+    /* DEPRECATED */
     if (alignAxis == MOVEMENT_AXIS_HORIZONTAL) {
         return yRef - RobotIMU_GetYInches();
     }

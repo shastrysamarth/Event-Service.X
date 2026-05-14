@@ -17,9 +17,11 @@ void RobotMotion_TurnRightAbout(TurnPivot_t pivot, float speedIPS);
 void RobotMotion_StartDistanceMove(DistanceAxis_t axis, int8_t direction, float targetInches);
 void RobotMotion_StopDistanceMove(void);
 uint8_t RobotMotion_IsDistanceMoveActive(void);
+/* Completes after open-loop time = targetInches / MOTOR_SPEED_IPS (ES_Timer_GetTime). */
 uint8_t RobotMotion_IsDistanceMoveComplete(void);
 DistanceAxis_t RobotMotion_GetDistanceAxis(void);
 int8_t RobotMotion_GetDistanceDirection(void);
+/* DEPRECATED name: target inches; used only for debug display (completion is timed). */
 float RobotMotion_GetDistanceTargetInches(void);
 
 #endif /* ROBOT_MOTION_H */

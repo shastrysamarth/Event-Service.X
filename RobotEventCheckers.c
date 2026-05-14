@@ -276,10 +276,6 @@ uint8_t CheckBumpEvents(void)
 
 uint8_t CheckDistanceMove(void)
 {
-#if !ROBOT_PLUGPLAY_USE_BNO055
-    return FALSE;
-#endif
-
     if (RobotMotion_IsDistanceMoveActive() &&
             RobotMotion_IsDistanceMoveComplete()) {
         return PostEvent(DistanceMoveCompleteEvent, 0u);
@@ -300,9 +296,12 @@ uint8_t CheckAlignEvents(void)
 
     AlignSubHSM_UpdateControl();
 
+    /* DEPRECATED: position-align completion (PositionRealignedEvent) no longer posted here. */
+#if 0
     if (AlignSubHSM_IsPositionStage() && AlignSubHSM_IsPositionAligned()) {
         return PostEvent(PositionRealignedEvent, 0u);
     }
+#endif
 
     if (AlignSubHSM_IsHeadingStage() && AlignSubHSM_IsHeadingAligned()) {
         return PostEvent(RealignedEvent, ALIGN_REALIGNED_SOURCE_SENSOR);
@@ -368,17 +367,10 @@ static uint8_t IsBeaconSearchActive(void)
 
 static uint8_t IsRobotMisaligned(void)
 {
-    float positionError;
     float headingError = RobotIMU_GetHeadingErrorToZeroDeg();
 
-    if (NavigateToISZ_GetMovementAxis() == MOVEMENT_AXIS_HORIZONTAL) {
-        positionError = NavigateToISZ_GetYRef() - RobotIMU_GetYInches();
-    } else {
-        positionError = NavigateToISZ_GetXRef() - RobotIMU_GetXInches();
-    }
-
-    return ((AbsFloat(positionError) > POSITION_THRESHOLD_IN) ||
-            (AbsFloat(headingError) > HEADING_THRESHOLD_DEG)) ? TRUE : FALSE;
+    /* Heading-only misalignment (DEPRECATED: position vs ref was IMU-based). */
+    return (AbsFloat(headingError) > HEADING_THRESHOLD_DEG) ? TRUE : FALSE;
 }
 
 static float AbsFloat(float value)

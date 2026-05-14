@@ -24,6 +24,7 @@
 #define NAV_SETTLE_TIMER 1
 #define SHOOT_TIMER 2
 
+/* DEPRECATED with heading-only align: was used for IMU position error vs ref. */
 #define POSITION_THRESHOLD_IN 0.75f
 #define HEADING_THRESHOLD_DEG 3.0f
 /* Small deadband on accel used for integration (LSB ≈ 0.01 m/s²). */
@@ -32,8 +33,8 @@
 #define IMU_STILL_ACCEL_RAW 45
 #define IMU_STILL_GYRO_RAW 12
 #define IMU_STATIONARY_CONFIRM_MS 400u
-/* BNO055 heading increases clockwise (top view); use -1 if field vs body is inverted. */
-#define IMU_HEADING_ROT_SIGN (-1.0f)
+/* DEPRECATED: heading rotation sign for field-frame accel integration (cosf/sinf removed). */
+/* #define IMU_HEADING_ROT_SIGN (-1.0f) */
 #define IMU_DEBUG_STREAM_PERIOD_MS 250u
 #define ALIGN_STABLE_SAMPLE_COUNT 3u
 /* RealignedEvent EventParam: sensor path runs IMU zero + ref re-anchor in Navigate. */

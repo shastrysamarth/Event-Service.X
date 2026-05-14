@@ -65,19 +65,14 @@ void RobotDebug_PrintModuleVariables(void)
     printf("[VAR] FindFrontTape.state=%s boundary_choice=%s\r\n",
             FindFrontTape_GetStateName(),
             BoundaryName(FindFrontTape_GetBoundaryChoice()));
-    printf("[VAR] NavigateToISZ.state=%s boundary_choice=%s movement_axis=%s num_tapes_crossed=%u\r\n",
-            NavigateToISZ_GetStateName(),
+    printf("[VAR] NavigateToISZ.state=%s\r\n", NavigateToISZ_GetStateName());
+    printf("[VAR] NavigateToISZ.boundary=%s axis=%s tapes=%u\r\n",
             BoundaryName(NavigateToISZ_GetBoundaryChoice()),
             MovementAxisName(NavigateToISZ_GetMovementAxis()),
             (unsigned int) NavigateToISZ_GetNumTapesCrossed());
-    PrintFixedValue("[VAR] NavigateToISZ.x_ref", NavigateToISZ_GetXRef(), "in");
-    PrintFixedValue("[VAR] NavigateToISZ.y_ref", NavigateToISZ_GetYRef(), "in");
-    printf("[VAR] Align.state=%s alignAxis=%s\r\n",
+    printf("[VAR] Align.state=%s axis=%s\r\n",
             AlignSubHSM_GetStateName(),
             MovementAxisName(AlignSubHSM_GetAxis()));
-    PrintFixedValue("[VAR] Align.xRef", AlignSubHSM_GetXRef(), "in");
-    PrintFixedValue("[VAR] Align.yRef", AlignSubHSM_GetYRef(), "in");
-    PrintFixedValue("[VAR] Align.positionError", AlignSubHSM_GetPositionError(), "in");
     PrintFixedValue("[VAR] Align.headingError", RobotIMU_GetHeadingErrorToZeroDeg(), "deg");
     printf("[VAR] Shooting.state=%s maxBeaconADC=%u\r\n",
             ShootingSubHSM_GetStateName(),

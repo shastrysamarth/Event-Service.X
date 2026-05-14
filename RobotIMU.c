@@ -1,6 +1,5 @@
 #include "RobotIMU.h"
 
-#include <math.h>
 #include <xc.h>
 #include <stdio.h>
 
@@ -35,7 +34,6 @@
 #define BNO055_POWER_MODE_NORMAL 0x00u
 #define BNO055_ACCEL_LSB_PER_MPS2 100.0f
 #define MPS2_TO_INPS2 39.3701f
-#define IMU_DEG_TO_RAD (3.14159265f / 180.0f)
 #define I2C_TIMEOUT_LOOPS 40000u
 
 #define BNO_SDA_TRIS PORTW06_TRIS
@@ -307,22 +305,15 @@ void RobotIMU_Update(void)
         axRaw = ApplyDeadbandS16(axRaw, IMU_ACCEL_INTEGRATE_DEADBAND_RAW);
         ayRaw = ApplyDeadbandS16(ayRaw, IMU_ACCEL_INTEGRATE_DEADBAND_RAW);
 
-        {
-            float abx;
-            float aby;
-            float psi;
-            float cPsi;
-            float sPsi;
-
-            abx = (((float) axRaw) / BNO055_ACCEL_LSB_PER_MPS2) * MPS2_TO_INPS2;
-            aby = (((float) ayRaw) / BNO055_ACCEL_LSB_PER_MPS2) * MPS2_TO_INPS2;
-            psi = headingDeg * IMU_HEADING_ROT_SIGN * IMU_DEG_TO_RAD;
-            cPsi = cosf(psi);
-            sPsi = sinf(psi);
-            /* Linear accel is in sensor body XY; rotate by fused heading for field-frame integration. */
-            xAccelIPS2 = abx * cPsi - aby * sPsi;
-            yAccelIPS2 = abx * sPsi + aby * cPsi;
-        }
+        /*
+         * DEPRECATED: field-frame rotation via cosf/sinf removed to avoid
+         * soft-float libm stack overflow on PIC32MX (1 KB stack).
+         * Position integration is no longer used for control; distance moves
+         * are timer-based and alignment is heading-only.
+         * xAccelIPS2/yAccelIPS2 are kept as raw body-frame values for debug.
+         */
+        xAccelIPS2 = (((float) axRaw) / BNO055_ACCEL_LSB_PER_MPS2) * MPS2_TO_INPS2;
+        yAccelIPS2 = (((float) ayRaw) / BNO055_ACCEL_LSB_PER_MPS2) * MPS2_TO_INPS2;
         zGyroDPS = ((float) gzRaw) / 16.0f;
 
         if ((planarAccelIsStill == TRUE) && (gyroIsStill == TRUE)) {
