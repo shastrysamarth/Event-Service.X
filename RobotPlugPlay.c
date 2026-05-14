@@ -17,15 +17,11 @@ void RobotPlugPlay_PrintConfig(void)
     static const PinoutLine_t lines[] = {
         {ROBOT_PLUGPLAY_USE_BNO055, "BNO055 gyro/accel", BNO055_PIN_LABEL},
         {ROBOT_PLUGPLAY_USE_BEACON_ADC, "Beacon ADC", BEACON_ADC_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_TAPE1_ADC, "Tape sensor 1", TAPE_SENSOR_1_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_TAPE2_ADC, "Tape sensor 2", TAPE_SENSOR_2_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_TAPE3_ADC, "Tape sensor 3", TAPE_SENSOR_3_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_TAPE4_ADC, "Tape sensor 4", TAPE_SENSOR_4_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_TAPE5_ADC, "Tape sensor 5", TAPE_SENSOR_5_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_TAPE6_ADC, "Tape sensor 6", TAPE_SENSOR_6_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_TAPE7_ADC, "Tape sensor 7", TAPE_SENSOR_7_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_TAPE8_ADC, "Tape sensor 8", TAPE_SENSOR_8_PIN_LABEL},
-        {ROBOT_PLUGPLAY_USE_TAPE9_ADC, "Tape sensor 9", TAPE_SENSOR_9_PIN_LABEL},
+        {ROBOT_PLUGPLAY_USE_TAPE1, "Tape sensor 1", TAPE_SENSOR_1_PIN_LABEL},
+        {ROBOT_PLUGPLAY_USE_TAPE2, "Tape sensor 2", TAPE_SENSOR_2_PIN_LABEL},
+        {ROBOT_PLUGPLAY_USE_TAPE3, "Tape sensor 3", TAPE_SENSOR_3_PIN_LABEL},
+        {ROBOT_PLUGPLAY_USE_TAPE4, "Tape sensor 4", TAPE_SENSOR_4_PIN_LABEL},
+        {ROBOT_PLUGPLAY_USE_TAPE5, "Tape sensor 5", TAPE_SENSOR_5_PIN_LABEL},
         {ROBOT_PLUGPLAY_USE_SOLENOID1_ADC, "Solenoid sensor 1", SOLENOID_SENSOR_1_PIN_LABEL},
         {ROBOT_PLUGPLAY_USE_SOLENOID2_ADC, "Solenoid sensor 2", SOLENOID_SENSOR_2_PIN_LABEL},
         {ROBOT_PLUGPLAY_USE_SOLENOID3_ADC, "Solenoid sensor 3", SOLENOID_SENSOR_3_PIN_LABEL},
@@ -56,27 +52,19 @@ void RobotPlugPlay_PrintConfig(void)
     printf("\r\n");
 }
 
-uint8_t RobotPlugPlay_IsTapeADCEnabled(uint8_t sensorNumber)
+uint8_t RobotPlugPlay_IsTapeEnabled(uint8_t sensorNumber)
 {
     switch (sensorNumber) {
     case 1:
-        return ROBOT_PLUGPLAY_USE_TAPE1_ADC;
+        return ROBOT_PLUGPLAY_USE_TAPE1;
     case 2:
-        return ROBOT_PLUGPLAY_USE_TAPE2_ADC;
+        return ROBOT_PLUGPLAY_USE_TAPE2;
     case 3:
-        return ROBOT_PLUGPLAY_USE_TAPE3_ADC;
+        return ROBOT_PLUGPLAY_USE_TAPE3;
     case 4:
-        return ROBOT_PLUGPLAY_USE_TAPE4_ADC;
+        return ROBOT_PLUGPLAY_USE_TAPE4;
     case 5:
-        return ROBOT_PLUGPLAY_USE_TAPE5_ADC;
-    case 6:
-        return ROBOT_PLUGPLAY_USE_TAPE6_ADC;
-    case 7:
-        return ROBOT_PLUGPLAY_USE_TAPE7_ADC;
-    case 8:
-        return ROBOT_PLUGPLAY_USE_TAPE8_ADC;
-    case 9:
-        return ROBOT_PLUGPLAY_USE_TAPE9_ADC;
+        return ROBOT_PLUGPLAY_USE_TAPE5;
     default:
         return FALSE;
     }

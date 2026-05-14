@@ -19,10 +19,6 @@ typedef enum {
     TAPE_SENSOR_3,
     TAPE_SENSOR_4,
     TAPE_SENSOR_5,
-    TAPE_SENSOR_6,
-    TAPE_SENSOR_7,
-    TAPE_SENSOR_8,
-    TAPE_SENSOR_9,
 } TapeSensor_t;
 
 typedef enum {

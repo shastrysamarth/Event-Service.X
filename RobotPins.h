@@ -6,8 +6,8 @@
 #include "RC_Servo.h"
 #include "pwm.h"
 
-#define CHASSIS_WIDTH_IN 11.0f
-#define CHASSIS_LENGTH_IN 11.0f
+#define CHASSIS_WIDTH_IN 10.0f
+#define CHASSIS_LENGTH_IN 10.0f
 #define ROBOT_HALF_WIDTH_IN (CHASSIS_WIDTH_IN / 2.0f)
 #define ROBOT_HALF_LENGTH_IN (CHASSIS_LENGTH_IN / 2.0f)
 
@@ -43,17 +43,21 @@
 #define DISTANCE_FORWARD_TO_ISZ_IN 10.0f
 #define DISTANCE_REVERSE_TO_SHOOT_IN 3.0f
 
-/* [FLAG][#1] Uno32 exposes 12 analog V/W inputs. Replace these ADC placeholders with the final tape/beacon wiring or mux channels.
+/* Tape sensors: digital inputs on PORTV (all 5 on same port for efficient read).
  * W6 and W8 are reserved for the BNO055 I2C hookup below. */
-#define TAPE_SENSOR_1_ADC_PIN AD_PORTV3
-#define TAPE_SENSOR_2_ADC_PIN AD_PORTV4
-#define TAPE_SENSOR_3_ADC_PIN AD_PORTV5
-#define TAPE_SENSOR_4_ADC_PIN AD_PORTV6
-#define TAPE_SENSOR_5_ADC_PIN AD_PORTV7
-#define TAPE_SENSOR_6_ADC_PIN AD_PORTV8
-#define TAPE_SENSOR_7_ADC_PIN AD_PORTW3
-#define TAPE_SENSOR_8_ADC_PIN AD_PORTW4
-#define TAPE_SENSOR_9_ADC_PIN AD_PORTW5
+#define TAPE_SENSOR_1_PORT PORTV
+#define TAPE_SENSOR_1_PIN  PIN3
+#define TAPE_SENSOR_2_PORT PORTV
+#define TAPE_SENSOR_2_PIN  PIN4
+#define TAPE_SENSOR_3_PORT PORTV
+#define TAPE_SENSOR_3_PIN  PIN5
+#define TAPE_SENSOR_4_PORT PORTV
+#define TAPE_SENSOR_4_PIN  PIN6
+#define TAPE_SENSOR_5_PORT PORTV
+#define TAPE_SENSOR_5_PIN  PIN7
+#define TAPE_SENSOR_PORTV_PINS (PIN3 | PIN4 | PIN5 | PIN6 | PIN7)
+/* Active level: 1 = pin HIGH when on tape, 0 = pin LOW when on tape. */
+#define TAPE_BLACK_IS_HIGH 1
 #define BEACON_ADC_PIN AD_PORTW7
 
 /* [FLAG][#1] Replace these solenoid ADC placeholders with final wiring or mux channels. */
@@ -73,10 +77,6 @@
 /* [FLAG][#1] Confirm if this is really an ADC command input; shooter motor output uses PWM below. */
 #define SHOOTER_MOTOR_ADC_PIN AD_PORTW5
 
-#define TAPE_SENSOR_ADC_PINS (TAPE_SENSOR_1_ADC_PIN | TAPE_SENSOR_2_ADC_PIN | \
-    TAPE_SENSOR_3_ADC_PIN | TAPE_SENSOR_4_ADC_PIN | TAPE_SENSOR_5_ADC_PIN | \
-    TAPE_SENSOR_6_ADC_PIN | TAPE_SENSOR_7_ADC_PIN | TAPE_SENSOR_8_ADC_PIN | \
-    TAPE_SENSOR_9_ADC_PIN)
 #define SOLENOID_SENSOR_ADC_PINS (SOLENOID_SENSOR_1_ADC_PIN | \
     SOLENOID_SENSOR_2_ADC_PIN | SOLENOID_SENSOR_3_ADC_PIN | \
     SOLENOID_SENSOR_4_ADC_PIN | SOLENOID_SENSOR_5_ADC_PIN | \
@@ -84,19 +84,14 @@
 #define BUMP_SENSOR_ADC_PINS (BUMP_SENSOR_1_ADC_PIN | BUMP_SENSOR_2_ADC_PIN | \
     BUMP_SENSOR_3_ADC_PIN | BUMP_SENSOR_4_ADC_PIN)
 
-#define ALL_ROBOT_ADC_PINS (TAPE_SENSOR_1_ADC_PIN | TAPE_SENSOR_2_ADC_PIN | \
-    TAPE_SENSOR_3_ADC_PIN | TAPE_SENSOR_4_ADC_PIN | TAPE_SENSOR_5_ADC_PIN | \
-    TAPE_SENSOR_6_ADC_PIN | TAPE_SENSOR_7_ADC_PIN | TAPE_SENSOR_8_ADC_PIN | \
-    TAPE_SENSOR_9_ADC_PIN | BEACON_ADC_PIN | SOLENOID_SENSOR_1_ADC_PIN | \
+#define ALL_ROBOT_ADC_PINS (BEACON_ADC_PIN | SOLENOID_SENSOR_1_ADC_PIN | \
     SOLENOID_SENSOR_2_ADC_PIN | SOLENOID_SENSOR_3_ADC_PIN | \
     SOLENOID_SENSOR_4_ADC_PIN | SOLENOID_SENSOR_5_ADC_PIN | \
     SOLENOID_SENSOR_6_ADC_PIN | BUMP_SENSOR_1_ADC_PIN | \
     BUMP_SENSOR_2_ADC_PIN | BUMP_SENSOR_3_ADC_PIN | BUMP_SENSOR_4_ADC_PIN | \
     SHOOTER_MOTOR_ADC_PIN)
 
-/* [FLAG][#1] Confirm actual thresholds and whether black tape / active sensors read high. */
-#define TAPE_BLACK_ADC_THRESHOLD 700u
-#define TAPE_BLACK_IS_HIGH 1
+/* [FLAG][#1] Confirm whether solenoid / bump active sensors read high. */
 #define SOLENOID_ON_ADC_THRESHOLD 700u
 #define SOLENOID_ON_IS_HIGH 1
 #define BUMP_ON_ADC_THRESHOLD 700u
@@ -166,15 +161,11 @@
 #define BNO055_SCL_PIN_LABEL "W8"
 #define BNO055_PIN_LABEL "SDA -> W6, SCL -> W8"
 #define BEACON_ADC_PIN_LABEL "W7 analog input"
-#define TAPE_SENSOR_1_PIN_LABEL "V3 analog input"
-#define TAPE_SENSOR_2_PIN_LABEL "V4 analog input"
-#define TAPE_SENSOR_3_PIN_LABEL "V5 analog input"
-#define TAPE_SENSOR_4_PIN_LABEL "V6 analog input"
-#define TAPE_SENSOR_5_PIN_LABEL "V7 analog input"
-#define TAPE_SENSOR_6_PIN_LABEL "V8 analog input"
-#define TAPE_SENSOR_7_PIN_LABEL "W3 analog input"
-#define TAPE_SENSOR_8_PIN_LABEL "W4 analog input"
-#define TAPE_SENSOR_9_PIN_LABEL "W5 analog input"
+#define TAPE_SENSOR_1_PIN_LABEL "V3 digital input"
+#define TAPE_SENSOR_2_PIN_LABEL "V4 digital input"
+#define TAPE_SENSOR_3_PIN_LABEL "V5 digital input"
+#define TAPE_SENSOR_4_PIN_LABEL "V6 digital input"
+#define TAPE_SENSOR_5_PIN_LABEL "V7 digital input"
 #define SOLENOID_SENSOR_1_PIN_LABEL "V3 analog input"
 #define SOLENOID_SENSOR_2_PIN_LABEL "V4 analog input"
 #define SOLENOID_SENSOR_3_PIN_LABEL "V5 analog input"

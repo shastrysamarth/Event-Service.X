@@ -1,10 +1,11 @@
 #include "RobotSensors.h"
 
 #include "AD.h"
+#include "IO_Ports.h"
 #include "RobotPins.h"
 #include "RobotPlugPlay.h"
 
-static unsigned int TapeADPin(TapeSensor_t sensor);
+static uint16_t TapeDigitalPin(TapeSensor_t sensor);
 static unsigned int SolenoidADPin(SolenoidSensor_t sensor);
 static unsigned int BumpADPin(BumpSensor_t sensor);
 static uint8_t IsThresholdActive(uint16_t reading, uint16_t threshold, uint8_t activeHigh);
@@ -13,32 +14,8 @@ uint8_t RobotSensors_Init(void)
 {
     unsigned int pins = 0u;
 
-#if ROBOT_PLUGPLAY_USE_TAPE1_ADC
-    pins |= TAPE_SENSOR_1_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_TAPE2_ADC
-    pins |= TAPE_SENSOR_2_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_TAPE3_ADC
-    pins |= TAPE_SENSOR_3_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_TAPE4_ADC
-    pins |= TAPE_SENSOR_4_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_TAPE5_ADC
-    pins |= TAPE_SENSOR_5_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_TAPE6_ADC
-    pins |= TAPE_SENSOR_6_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_TAPE7_ADC
-    pins |= TAPE_SENSOR_7_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_TAPE8_ADC
-    pins |= TAPE_SENSOR_8_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_TAPE9_ADC
-    pins |= TAPE_SENSOR_9_ADC_PIN;
+#if ROBOT_PLUGPLAY_USE_ANY_TAPE
+    IO_PortsSetPortInputs(PORTV, TAPE_SENSOR_PORTV_PINS);
 #endif
 #if ROBOT_PLUGPLAY_USE_BEACON_ADC
     pins |= BEACON_ADC_PIN;
@@ -92,10 +69,15 @@ uint16_t RobotSensors_ReadBeaconADC(void)
 #endif
 }
 
-uint16_t RobotSensors_ReadTapeADC(TapeSensor_t sensor)
+uint8_t RobotSensors_ReadTapeDigital(TapeSensor_t sensor)
 {
-    return RobotPlugPlay_IsTapeADCEnabled((uint8_t) sensor) ?
-            AD_ReadADPin(TapeADPin(sensor)) : 0u;
+    uint16_t pin;
+
+    if (RobotPlugPlay_IsTapeEnabled((uint8_t) sensor) == FALSE) {
+        return 0u;
+    }
+    pin = TapeDigitalPin(sensor);
+    return (IO_PortsReadPort(PORTV) & pin) ? 1u : 0u;
 }
 
 uint16_t RobotSensors_ReadSolenoidADC(SolenoidSensor_t sensor)
@@ -121,11 +103,13 @@ uint16_t RobotSensors_ReadShooterMotorADC(void)
 
 uint8_t RobotSensors_IsTapeOn(TapeSensor_t sensor)
 {
-    if (RobotPlugPlay_IsTapeADCEnabled((uint8_t) sensor) == FALSE) {
+    uint8_t reading;
+
+    if (RobotPlugPlay_IsTapeEnabled((uint8_t) sensor) == FALSE) {
         return FALSE;
     }
-    return IsThresholdActive(RobotSensors_ReadTapeADC(sensor),
-            TAPE_BLACK_ADC_THRESHOLD, TAPE_BLACK_IS_HIGH);
+    reading = RobotSensors_ReadTapeDigital(sensor);
+    return TAPE_BLACK_IS_HIGH ? (reading != 0u) : (reading == 0u);
 }
 
 uint8_t RobotSensors_IsSolenoidOn(SolenoidSensor_t sensor)
@@ -146,29 +130,21 @@ uint8_t RobotSensors_IsBumpOn(BumpSensor_t sensor)
             BUMP_ON_ADC_THRESHOLD, BUMP_ON_IS_HIGH);
 }
 
-static unsigned int TapeADPin(TapeSensor_t sensor)
+static uint16_t TapeDigitalPin(TapeSensor_t sensor)
 {
     switch (sensor) {
     case TAPE_SENSOR_1:
-        return TAPE_SENSOR_1_ADC_PIN;
+        return TAPE_SENSOR_1_PIN;
     case TAPE_SENSOR_2:
-        return TAPE_SENSOR_2_ADC_PIN;
+        return TAPE_SENSOR_2_PIN;
     case TAPE_SENSOR_3:
-        return TAPE_SENSOR_3_ADC_PIN;
+        return TAPE_SENSOR_3_PIN;
     case TAPE_SENSOR_4:
-        return TAPE_SENSOR_4_ADC_PIN;
+        return TAPE_SENSOR_4_PIN;
     case TAPE_SENSOR_5:
-        return TAPE_SENSOR_5_ADC_PIN;
-    case TAPE_SENSOR_6:
-        return TAPE_SENSOR_6_ADC_PIN;
-    case TAPE_SENSOR_7:
-        return TAPE_SENSOR_7_ADC_PIN;
-    case TAPE_SENSOR_8:
-        return TAPE_SENSOR_8_ADC_PIN;
-    case TAPE_SENSOR_9:
-        return TAPE_SENSOR_9_ADC_PIN;
+        return TAPE_SENSOR_5_PIN;
     default:
-        return TAPE_SENSOR_1_ADC_PIN;
+        return 0u;
     }
 }
 

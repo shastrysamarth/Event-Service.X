@@ -135,7 +135,7 @@ uint8_t CheckCompoundNavigationEvents(void)
     uint8_t tape4 = RobotSensors_IsTapeOn(TAPE_SENSOR_4);
     uint8_t current;
 
-#if !ROBOT_PLUGPLAY_USE_ANY_TAPE_ADC
+#if !ROBOT_PLUGPLAY_USE_ANY_TAPE
     return FALSE;
 #endif
 
@@ -185,7 +185,7 @@ uint8_t CheckTapeEvents(void)
     uint8_t i;
     uint8_t current;
 
-#if !ROBOT_PLUGPLAY_USE_ANY_TAPE_ADC
+#if !ROBOT_PLUGPLAY_USE_ANY_TAPE
     return FALSE;
 #endif
 

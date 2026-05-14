@@ -7,7 +7,7 @@
 uint8_t RobotSensors_Init(void);
 
 uint16_t RobotSensors_ReadBeaconADC(void);
-uint16_t RobotSensors_ReadTapeADC(TapeSensor_t sensor);
+uint8_t  RobotSensors_ReadTapeDigital(TapeSensor_t sensor);
 uint16_t RobotSensors_ReadSolenoidADC(SolenoidSensor_t sensor);
 uint16_t RobotSensors_ReadBumpADC(BumpSensor_t sensor);
 uint16_t RobotSensors_ReadShooterMotorADC(void);
