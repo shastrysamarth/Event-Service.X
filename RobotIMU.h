@@ -1,0 +1,34 @@
+#ifndef ROBOT_IMU_H
+#define ROBOT_IMU_H
+
+#include "BOARD.h"
+
+uint8_t RobotIMU_Init(void);
+uint8_t RobotIMU_BeginNDOF(void);
+uint8_t RobotIMU_IsFullyCalibrated(void);
+
+void RobotIMU_Update(void);
+void RobotIMU_ZeroAll(void);
+void RobotIMU_ZeroHeading(void);
+void RobotIMU_ZeroPositionVelocity(void);
+
+float RobotIMU_GetHeadingDeg(void);
+float RobotIMU_GetXInches(void);
+float RobotIMU_GetYInches(void);
+float RobotIMU_GetHeadingErrorToZeroDeg(void);
+uint8_t RobotIMU_IsReady(void);
+float RobotIMU_GetHeadingOffsetDeg(void);
+float RobotIMU_GetXVelocityIPS(void);
+float RobotIMU_GetYVelocityIPS(void);
+uint8_t RobotIMU_IsStationary(void);
+float RobotIMU_GetXAccelIPS2(void);
+float RobotIMU_GetYAccelIPS2(void);
+float RobotIMU_GetZGyroDPS(void);
+void RobotIMU_PrintDebugSnapshot(void);
+void RobotIMU_SetDebugStream(uint8_t enabled);
+void RobotIMU_ToggleDebugStream(void);
+uint8_t RobotIMU_IsDebugStreamEnabled(void);
+void RobotIMU_DebugStreamTick(void);
+uint8_t RobotIMU_EnsureNDOF(void);
+
+#endif /* ROBOT_IMU_H */
