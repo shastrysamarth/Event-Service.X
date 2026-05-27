@@ -29,8 +29,6 @@ uint8_t RobotLauncher_Init(void)
     uint8_t ok = TRUE;
 
 #if ROBOT_PLUGPLAY_USE_SHOOTER_MOTOR
-    SHOOTER_MOTOR_DIR_TRIS = 0;
-    SHOOTER_MOTOR_DIR_LAT = 1;
     if (EnsurePWMReady() != TRUE) {
         ok = FALSE;
     }
@@ -64,7 +62,6 @@ void RobotLauncher_SetAngleFromBeaconADC(uint16_t beaconADC)
 void RobotLauncher_StartShooter(void)
 {
 #if ROBOT_PLUGPLAY_USE_SHOOTER_MOTOR
-    SHOOTER_MOTOR_DIR_LAT = 1;
     PWM_SetDutyCycle(SHOOTER_MOTOR_PWM_PIN, SHOOTER_MOTOR_DUTY);
 #endif
 }

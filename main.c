@@ -9,11 +9,27 @@
 
 void main(void)
 {
+#if !defined(ROBOT_MOTOR_SENSOR_TEST) && !defined(ROBOT_BEACON_TEST) && \
+    !defined(ROBOT_GPIO_HIGH_TEST)
     ES_Return_t errorType;
+#endif
 
     BOARD_Init();
     RobotHardware_Init();
 
+#ifdef ROBOT_MOTOR_SENSOR_TEST
+    printf("Starting direct motor/sensor bench harness\r\n");
+    RobotPlugPlay_PrintConfig();
+    RobotTestHarness_RunMotorSensorBench();
+#elif defined(ROBOT_BEACON_TEST)
+    printf("Starting direct beacon ADC bench harness\r\n");
+    RobotPlugPlay_PrintConfig();
+    RobotTestHarness_RunBeaconBench();
+#elif defined(ROBOT_GPIO_HIGH_TEST)
+    printf("Starting GPIO-high bench harness\r\n");
+    RobotPlugPlay_PrintConfig();
+    RobotTestHarness_RunGPIOHighBench();
+#else
     printf("Starting Sluggers Lost Goal full HSM\r\n");
 #ifdef ROBOT_KEYBOARD_TEST
     printf("Keyboard HSM test harness enabled\r\n");
@@ -42,4 +58,5 @@ void main(void)
 
     for (;;) {
     }
+#endif
 }

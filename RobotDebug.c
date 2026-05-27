@@ -7,6 +7,7 @@
 #include "RobotIMU.h"
 #include "RobotMotion.h"
 #include "RobotPlugPlay.h"
+#include "RobotSensors.h"
 #include "ShootingSubHSM.h"
 
 #include <stdio.h>
@@ -77,6 +78,15 @@ void RobotDebug_PrintModuleVariables(void)
     printf("[VAR] Shooting.state=%s maxBeaconADC=%u\r\n",
             ShootingSubHSM_GetStateName(),
             (unsigned int) ShootingSubHSM_GetMaxBeaconADC());
+    {
+        uint16_t beaconRaw = RobotSensors_ReadBeaconRawADC();
+        uint16_t beaconSmooth = RobotSensors_ReadBeaconADC();
+        printf("[VAR] BeaconADC.enabled=%u raw=%u smooth=%u distance=%u ft\r\n",
+                (unsigned int) ROBOT_PLUGPLAY_USE_BEACON_ADC,
+                (unsigned int) beaconRaw,
+                (unsigned int) beaconSmooth,
+                (unsigned int) RobotSensors_BeaconDistanceFeetFromADC(beaconSmooth));
+    }
     printf("[VAR] BNO055.enabled=%u ready=%u calibrated=%u\r\n",
             (unsigned int) ROBOT_PLUGPLAY_USE_BNO055,
             (unsigned int) imuReady,
@@ -91,7 +101,7 @@ void RobotDebug_PrintModuleVariables(void)
     PrintFixedValue("[VAR] IMU.yAccel", RobotIMU_GetYAccelIPS2(), "in/s^2");
     PrintFixedValue("[VAR] IMU.xVelocity", RobotIMU_GetXVelocityIPS(), "in/s");
     PrintFixedValue("[VAR] IMU.yVelocity", RobotIMU_GetYVelocityIPS(), "in/s");
-    PrintFixedValue("[VAR] IMU.zGyro", RobotIMU_GetZGyroDPS(), "dps");
+    PrintFixedValue("[VAR] IMU.headingGyro", RobotIMU_GetZGyroDPS(), "dps");
     printf("[VAR] Motion.distanceMoveActive=%u axis=%s direction=%d\r\n",
             (unsigned int) RobotMotion_IsDistanceMoveActive(),
             DistanceAxisName(RobotMotion_GetDistanceAxis()),

@@ -36,12 +36,12 @@
 #define MPS2_TO_INPS2 39.3701f
 #define I2C_TIMEOUT_LOOPS 40000u
 
-#define BNO_SDA_TRIS PORTW06_TRIS
-#define BNO_SDA_LAT PORTW06_LAT
-#define BNO_SDA_BIT PORTW06_BIT
-#define BNO_SCL_TRIS PORTW08_TRIS
-#define BNO_SCL_LAT PORTW08_LAT
-#define BNO_SCL_BIT PORTW08_BIT
+#define BNO_SDA_TRIS PORTV03_TRIS
+#define BNO_SDA_LAT PORTV03_LAT
+#define BNO_SDA_BIT PORTV03_BIT
+#define BNO_SCL_TRIS PORTV04_TRIS
+#define BNO_SCL_LAT PORTV04_LAT
+#define BNO_SCL_BIT PORTV04_BIT
 
 static uint8_t imuReady = FALSE;
 static uint8_t bnoAddress = BNO055_ADDR_LOW;
@@ -53,6 +53,7 @@ static float xVelocityIPS = 0.0f;
 static float yVelocityIPS = 0.0f;
 static float xAccelIPS2 = 0.0f;
 static float yAccelIPS2 = 0.0f;
+/* Compatibility getter name kept; value follows BNO055_HEADING_AXIS. */
 static float zGyroDPS = 0.0f;
 static uint32_t lastUpdateMs = 0;
 static uint16_t stationaryMs = 0u;
@@ -92,6 +93,9 @@ static uint8_t BNO055Read8(uint8_t reg, uint8_t *value);
 static int16_t ReadS16(const uint8_t *buffer);
 static void StoreVector3(const uint8_t *buffer, int16_t vector[3]);
 static void StoreQuaternion(const uint8_t *buffer, int16_t quaternion[4]);
+static int16_t SelectConfiguredAxis(const int16_t vector[3]);
+static uint8_t ReadHeadingAxisRaw(int16_t *headingRaw);
+static const char *HeadingAxisName(void);
 static int16_t ApplyDeadbandS16(int16_t value, int16_t deadband);
 static uint16_t AbsS16(int16_t value);
 static float NormalizeHeading(float heading);
@@ -110,7 +114,8 @@ uint8_t RobotIMU_Init(void)
     if (BNO055Find() != TRUE) {
         imuReady = FALSE;
 #ifdef ROBOT_DEBUG
-        printf("[DEBUG][IMU] BNO055 not found on SDA W6 / SCL W8\r\n");
+        printf("[DEBUG][IMU] BNO055 not found on SDA %s / SCL %s\r\n",
+                BNO055_SDA_PIN_LABEL, BNO055_SCL_PIN_LABEL);
 #endif
         return FALSE;
     }
@@ -118,8 +123,9 @@ uint8_t RobotIMU_Init(void)
     imuReady = RobotIMU_BeginNDOF();
     RobotIMU_ZeroAll();
 #ifdef ROBOT_DEBUG
-    printf("[DEBUG][IMU] BNO055 %s at 0x%02X on SDA W6 / SCL W8\r\n",
-            imuReady ? "ready" : "init failed", bnoAddress);
+    printf("[DEBUG][IMU] BNO055 %s at 0x%02X on SDA %s / SCL %s, heading axis %s\r\n",
+            imuReady ? "ready" : "init failed", bnoAddress,
+            BNO055_SDA_PIN_LABEL, BNO055_SCL_PIN_LABEL, HeadingAxisName());
 #endif
     return imuReady;
 #else
@@ -210,6 +216,7 @@ void RobotIMU_Update(void)
     int16_t gxRaw;
     int16_t gyRaw;
     int16_t gzRaw;
+    int16_t headingGyroRaw;
     uint8_t planarAccelIsStill;
     uint8_t gyroIsStill;
 
@@ -226,7 +233,7 @@ void RobotIMU_Update(void)
 
     if (BNO055ReadLen(BNO055_EULER_H_LSB_REG, buffer, 6u) == TRUE) {
         StoreVector3(buffer, rawEuler);
-        headingDeg = NormalizeHeading(((float) ReadS16(buffer)) / 16.0f - headingOffsetDeg);
+        headingDeg = NormalizeHeading(((float) SelectConfiguredAxis(rawEuler)) / 16.0f - headingOffsetDeg);
     } else {
         lastReadOk = FALSE;
     }
@@ -252,6 +259,7 @@ void RobotIMU_Update(void)
             gyRaw = rawGyro[1];
             gzRaw = rawGyro[2];
         }
+        headingGyroRaw = SelectConfiguredAxis(rawGyro);
 
         if (BNO055ReadLen(BNO055_ACCEL_DATA_X_LSB_REG, tempBuffer, 6u) == TRUE) {
             StoreVector3(tempBuffer, rawAccel);
@@ -297,10 +305,11 @@ void RobotIMU_Update(void)
 
         planarAccelIsStill = ((AbsS16(axRawStill) <= IMU_STILL_ACCEL_RAW) &&
                 (AbsS16(ayRawStill) <= IMU_STILL_ACCEL_RAW)) ? TRUE : FALSE;
-        gyroIsStill = (AbsS16(gzRaw) <= IMU_STILL_GYRO_RAW) ? TRUE : FALSE;
+        gyroIsStill = (AbsS16(headingGyroRaw) <= IMU_STILL_GYRO_RAW) ? TRUE : FALSE;
         (void) azRaw;
         (void) gxRaw;
         (void) gyRaw;
+        (void) gzRaw;
 
         axRaw = ApplyDeadbandS16(axRaw, IMU_ACCEL_INTEGRATE_DEADBAND_RAW);
         ayRaw = ApplyDeadbandS16(ayRaw, IMU_ACCEL_INTEGRATE_DEADBAND_RAW);
@@ -314,7 +323,7 @@ void RobotIMU_Update(void)
          */
         xAccelIPS2 = (((float) axRaw) / BNO055_ACCEL_LSB_PER_MPS2) * MPS2_TO_INPS2;
         yAccelIPS2 = (((float) ayRaw) / BNO055_ACCEL_LSB_PER_MPS2) * MPS2_TO_INPS2;
-        zGyroDPS = ((float) gzRaw) / 16.0f;
+        zGyroDPS = ((float) headingGyroRaw) / 16.0f;
 
         if ((planarAccelIsStill == TRUE) && (gyroIsStill == TRUE)) {
             if (stationaryMs < IMU_STATIONARY_CONFIRM_MS) {
@@ -349,10 +358,10 @@ void RobotIMU_Update(void)
 void RobotIMU_ZeroAll(void)
 {
 #if ROBOT_PLUGPLAY_USE_BNO055
-    uint8_t buffer[2];
+    int16_t headingRaw;
 
-    if (BNO055ReadLen(BNO055_EULER_H_LSB_REG, buffer, 2u) == TRUE) {
-        headingOffsetDeg = ((float) ReadS16(buffer)) / 16.0f;
+    if (ReadHeadingAxisRaw(&headingRaw) == TRUE) {
+        headingOffsetDeg = ((float) headingRaw) / 16.0f;
     }
 #else
     headingOffsetDeg = 0.0f;
@@ -365,10 +374,10 @@ void RobotIMU_ZeroAll(void)
 void RobotIMU_ZeroHeading(void)
 {
 #if ROBOT_PLUGPLAY_USE_BNO055
-    uint8_t buffer[2];
+    int16_t headingRaw;
 
-    if (BNO055ReadLen(BNO055_EULER_H_LSB_REG, buffer, 2u) == TRUE) {
-        headingOffsetDeg = ((float) ReadS16(buffer)) / 16.0f;
+    if (ReadHeadingAxisRaw(&headingRaw) == TRUE) {
+        headingOffsetDeg = ((float) headingRaw) / 16.0f;
     }
 #else
     headingOffsetDeg = 0.0f;
@@ -468,7 +477,9 @@ void RobotIMU_PrintDebugSnapshot(void)
             (unsigned int) (rawCalib & 0x03u),
             (unsigned int) isStationary,
             (unsigned int) stationaryMs);
-    printf("[IMU] modeGuard=%s\r\n", lastModeWasNDOF ? "NDOF" : "RECOVERING");
+    printf("[IMU] modeGuard=%s headingAxis=%s\r\n",
+            lastModeWasNDOF ? "NDOF" : "RECOVERING",
+            HeadingAxisName());
 
     printf("[IMU] eul H/R/P=");
     PrintFixedQ4(rawEuler[0]);
@@ -616,7 +627,8 @@ static void I2CInit(void)
 
     (void) BNO055_I2C_BAUD_HZ;
 
-    AD1PCFGSET = (1u << 12) | (1u << 14);
+    /* V3/V4 are RB2/RB3; force them to digital I/O for bit-banged I2C. */
+    AD1PCFGSET = (1u << 2) | (1u << 3);
     BNO_SDA_LAT = 0;
     BNO_SCL_LAT = 0;
     BNO_SDA_TRIS = 1;
@@ -869,6 +881,45 @@ static void StoreQuaternion(const uint8_t *buffer, int16_t quaternion[4])
     quaternion[1] = ReadS16(&buffer[2]);
     quaternion[2] = ReadS16(&buffer[4]);
     quaternion[3] = ReadS16(&buffer[6]);
+}
+
+static int16_t SelectConfiguredAxis(const int16_t vector[3])
+{
+#if BNO055_HEADING_AXIS == BNO055_AXIS_X
+    return vector[0];
+#elif BNO055_HEADING_AXIS == BNO055_AXIS_Y
+    return vector[1];
+#elif BNO055_HEADING_AXIS == BNO055_AXIS_Z
+    return vector[2];
+#else
+    return vector[0];
+#endif
+}
+
+static uint8_t ReadHeadingAxisRaw(int16_t *headingRaw)
+{
+    uint8_t buffer[6];
+
+    if (BNO055ReadLen(BNO055_EULER_H_LSB_REG, buffer, 6u) != TRUE) {
+        return FALSE;
+    }
+
+    StoreVector3(buffer, rawEuler);
+    *headingRaw = SelectConfiguredAxis(rawEuler);
+    return TRUE;
+}
+
+static const char *HeadingAxisName(void)
+{
+#if BNO055_HEADING_AXIS == BNO055_AXIS_X
+    return "X";
+#elif BNO055_HEADING_AXIS == BNO055_AXIS_Y
+    return "Y";
+#elif BNO055_HEADING_AXIS == BNO055_AXIS_Z
+    return "Z";
+#else
+    return "?";
+#endif
 }
 
 static int16_t ApplyDeadbandS16(int16_t value, int16_t deadband)

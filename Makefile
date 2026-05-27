@@ -57,9 +57,12 @@ MP_EXTRA_CC_PRE += -I"."
 # Command-line helpers:
 #   make ROBOT_DEBUG=1    -> enable state-entry logs
 #   make ROBOT_TEST=1     -> enable keyboard event injection and state logs
+#   make MOTOR_SENSOR_TEST=1 -> direct motor/sensor bench harness, no HSM
+#   make BEACON_TEST=1 -> direct beacon ADC smoothing harness, no HSM
+#   make GPIO_HIGH_TEST=1 -> set connector GPIO pins high for probing
 #   make ROBOT_TRACE=1    -> enable verbose framework Run... trace output
 #   Add plug-play hardware in test mode with HW_IMU=1, HW_MOTORS=1,
-#   HW_BEACON=1, HW_TAPE=1, HW_SOLENOID=1, HW_BUMP=1, HW_SERVO=1,
+#   HW_BEACON=1, HW_TAPE=1, HW_BUMP=1, HW_SERVO=1,
 #   HW_SHOOTER=1, HW_SHOOTER_ADC=1, or HW_STEPPER=1.
 ifdef ROBOT_DEBUG
 MP_EXTRA_CC_PRE += -DROBOT_DEBUG
@@ -67,6 +70,22 @@ endif
 
 ifdef ROBOT_TEST
 MP_EXTRA_CC_PRE += -DROBOT_KEYBOARD_TEST -DROBOT_DEBUG
+endif
+
+ifdef MOTOR_SENSOR_TEST
+MP_EXTRA_CC_PRE += -DROBOT_MOTOR_SENSOR_TEST -DROBOT_DEBUG \
+    -DROBOT_HW_USE_DRIVE_MOTORS -DROBOT_HW_USE_TAPE \
+    -DROBOT_HW_USE_BUMP -DROBOT_HW_USE_BEACON_ADC \
+    -DROBOT_HW_USE_SHOOTER_MOTOR
+endif
+
+ifdef BEACON_TEST
+MP_EXTRA_CC_PRE += -DROBOT_BEACON_TEST -DROBOT_DEBUG \
+    -DROBOT_HW_USE_BEACON_ADC
+endif
+
+ifdef GPIO_HIGH_TEST
+MP_EXTRA_CC_PRE += -DROBOT_GPIO_HIGH_TEST -DROBOT_DEBUG
 endif
 
 ifdef ROBOT_TRACE
@@ -89,9 +108,10 @@ ifdef HW_TAPE
 MP_EXTRA_CC_PRE += -DROBOT_HW_USE_TAPE
 endif
 
-ifdef HW_SOLENOID
-MP_EXTRA_CC_PRE += -DROBOT_HW_USE_SOLENOID_ADC
-endif
+# Solenoid hardware placement is intentionally disabled for now.
+# ifdef HW_SOLENOID
+# MP_EXTRA_CC_PRE += -DROBOT_HW_USE_SOLENOID_ADC
+# endif
 
 ifdef HW_BUMP
 MP_EXTRA_CC_PRE += -DROBOT_HW_USE_BUMP

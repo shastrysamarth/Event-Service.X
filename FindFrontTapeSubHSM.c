@@ -14,6 +14,7 @@ typedef enum {
     SpinLeftState,
     WaitForBeaconDecreaseState,
     MoveForwardState,
+    MoveBackwardState,
     SlowMoveForwardState,
     PrepTurnRightState,
     TurnRightState,
@@ -27,6 +28,7 @@ static const char *StateNames[] = {
     "SpinLeftState",
     "WaitForBeaconDecreaseState",
     "MoveForwardState",
+    "MoveBackwardState",
     "SlowMoveForwardState",
     "PrepTurnRightState",
     "TurnRightState",
@@ -126,6 +128,33 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
             nextState = SlowMoveForwardState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        case TapeSensor5OnEvent:
+            nextState = MoveBackwardState;
+            makeTransition = TRUE;
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        case TapeSensor4OnEvent:
+            boundary_choice = BOUNDARY_TOP;
+            nextState = PrepTurnRightState;
+            makeTransition = TRUE;
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        case TapeSensor3OnEvent:
+            boundary_choice = BOUNDARY_BOTTOM;
+            nextState = PrepTurnLeftState;
+            makeTransition = TRUE;
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case MoveBackwardState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            RobotMotion_Reverse(MOTOR_SPEED_IPS);
             break;
         case TapeSensor4OnEvent:
             boundary_choice = BOUNDARY_TOP;

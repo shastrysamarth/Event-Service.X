@@ -84,6 +84,11 @@ void RobotMotion_TurnLeftAbout(TurnPivot_t pivot, float speedIPS)
     float yOffset;
     float omega;
 
+    if (pivot == TURN_PIVOT_CENTER) {
+        SetDriveWheels(-speedIPS, speedIPS, -speedIPS, speedIPS);
+        return;
+    }
+
     PivotOffset(pivot, &xOffset, &yOffset);
     omega = speedIPS / (ROBOT_HALF_WIDTH_IN + ROBOT_HALF_LENGTH_IN);
     SetChassisVelocity(omega * yOffset, -omega * xOffset, omega);
@@ -94,6 +99,11 @@ void RobotMotion_TurnRightAbout(TurnPivot_t pivot, float speedIPS)
     float xOffset;
     float yOffset;
     float omega;
+
+    if (pivot == TURN_PIVOT_CENTER) {
+        SetDriveWheels(speedIPS, -speedIPS, speedIPS, -speedIPS);
+        return;
+    }
 
     PivotOffset(pivot, &xOffset, &yOffset);
     omega = -speedIPS / (ROBOT_HALF_WIDTH_IN + ROBOT_HALF_LENGTH_IN);
@@ -278,6 +288,9 @@ static int SpeedToDuty(float wheelSpeedIPS)
     float magnitude = AbsFloat(wheelSpeedIPS);
     int duty = (int) (magnitude * MOTOR_DUTY_PER_IPS);
 
+    if ((duty > 0) && (duty < (int) MOTOR_MIN_ACTIVE_DUTY)) {
+        duty = (int) MOTOR_MIN_ACTIVE_DUTY;
+    }
     if (duty > MAX_PWM) {
         duty = MAX_PWM;
     }

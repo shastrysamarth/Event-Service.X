@@ -5,45 +5,33 @@
 #include "RobotPins.h"
 #include "RobotPlugPlay.h"
 
+static uint8_t TapeDigitalPort(TapeSensor_t sensor);
 static uint16_t TapeDigitalPin(TapeSensor_t sensor);
-static unsigned int SolenoidADPin(SolenoidSensor_t sensor);
 static uint8_t BumpDigitalPort(BumpSensor_t sensor);
 static uint16_t BumpDigitalPin(BumpSensor_t sensor);
-static uint8_t IsThresholdActive(uint16_t reading, uint16_t threshold, uint8_t activeHigh);
+static uint16_t BeaconAveragePush(uint16_t reading);
+
+static uint16_t beaconSamples[BEACON_AVERAGE_SAMPLE_COUNT];
+static uint32_t beaconSampleSum = 0u;
+static uint8_t beaconSampleIndex = 0u;
+static uint8_t beaconSampleCount = 0u;
 
 uint8_t RobotSensors_Init(void)
 {
     unsigned int pins = 0u;
 
 #if ROBOT_PLUGPLAY_USE_ANY_TAPE
-    IO_PortsSetPortInputs(PORTV, TAPE_SENSOR_PORTV_PINS);
+    IO_PortsSetPortInputs(PORTZ, TAPE_SENSOR_PORTZ_PINS);
 #endif
 #if ROBOT_PLUGPLAY_USE_BEACON_ADC
     pins |= BEACON_ADC_PIN;
 #endif
-#if ROBOT_PLUGPLAY_USE_SOLENOID1_ADC
-    pins |= SOLENOID_SENSOR_1_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_SOLENOID2_ADC
-    pins |= SOLENOID_SENSOR_2_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_SOLENOID3_ADC
-    pins |= SOLENOID_SENSOR_3_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_SOLENOID4_ADC
-    pins |= SOLENOID_SENSOR_4_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_SOLENOID5_ADC
-    pins |= SOLENOID_SENSOR_5_ADC_PIN;
-#endif
-#if ROBOT_PLUGPLAY_USE_SOLENOID6_ADC
-    pins |= SOLENOID_SENSOR_6_ADC_PIN;
-#endif
+    /* Solenoid ADC placements intentionally disabled for now. */
 #if ROBOT_PLUGPLAY_USE_BUMP1 || ROBOT_PLUGPLAY_USE_BUMP2 || ROBOT_PLUGPLAY_USE_BUMP3
-    IO_PortsSetPortInputs(PORTW, BUMP_SENSOR_PORTW_PINS);
+    IO_PortsSetPortInputs(PORTV, BUMP_SENSOR_PORTV_PINS);
 #endif
 #if ROBOT_PLUGPLAY_USE_BUMP4
-    IO_PortsSetPortInputs(PORTV, BUMP_SENSOR_4_PIN);
+    IO_PortsSetPortInputs(PORTZ, BUMP_SENSOR_PORTZ_PINS);
 #endif
 #if ROBOT_PLUGPLAY_USE_SHOOTER_ADC
     pins |= SHOOTER_MOTOR_ADC_PIN;
@@ -55,7 +43,7 @@ uint8_t RobotSensors_Init(void)
     return (AD_AddPins(pins) == SUCCESS) ? TRUE : FALSE;
 }
 
-uint16_t RobotSensors_ReadBeaconADC(void)
+uint16_t RobotSensors_ReadBeaconRawADC(void)
 {
 #if ROBOT_PLUGPLAY_USE_BEACON_ADC
     return AD_ReadADPin(BEACON_ADC_PIN);
@@ -64,21 +52,32 @@ uint16_t RobotSensors_ReadBeaconADC(void)
 #endif
 }
 
+uint16_t RobotSensors_ReadBeaconADC(void)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    return BeaconAveragePush(RobotSensors_ReadBeaconRawADC());
+#else
+    return 0u;
+#endif
+}
+
 uint8_t RobotSensors_ReadTapeDigital(TapeSensor_t sensor)
 {
+    uint8_t port;
     uint16_t pin;
 
     if (RobotPlugPlay_IsTapeEnabled((uint8_t) sensor) == FALSE) {
         return 0u;
     }
+    port = TapeDigitalPort(sensor);
     pin = TapeDigitalPin(sensor);
-    return (IO_PortsReadPort(PORTV) & pin) ? 1u : 0u;
+    return (IO_PortsReadPort(port) & pin) ? 1u : 0u;
 }
 
 uint16_t RobotSensors_ReadSolenoidADC(SolenoidSensor_t sensor)
 {
-    return RobotPlugPlay_IsSolenoidADCEnabled((uint8_t) sensor) ?
-            AD_ReadADPin(SolenoidADPin(sensor)) : 0u;
+    (void) sensor;
+    return 0u;
 }
 
 uint8_t RobotSensors_ReadBumpDigital(BumpSensor_t sensor)
@@ -103,6 +102,34 @@ uint16_t RobotSensors_ReadShooterMotorADC(void)
 #endif
 }
 
+uint8_t RobotSensors_ReadBeaconDistanceFeet(void)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    return RobotSensors_BeaconDistanceFeetFromADC(RobotSensors_ReadBeaconADC());
+#else
+    return BEACON_DISTANCE_UNKNOWN_FT;
+#endif
+}
+
+uint8_t RobotSensors_BeaconDistanceFeetFromADC(uint16_t reading)
+{
+    uint32_t numerator;
+    uint32_t denominator;
+
+    if (reading >= BEACON_ADC_AT_6FT) {
+        return BEACON_DISTANCE_MIN_FT;
+    }
+    if (reading <= BEACON_ADC_AT_16FT) {
+        return BEACON_DISTANCE_MAX_FT;
+    }
+
+    numerator = ((uint32_t) (BEACON_ADC_AT_6FT - reading)) *
+            (BEACON_DISTANCE_MAX_FT - BEACON_DISTANCE_MIN_FT);
+    denominator = (uint32_t) (BEACON_ADC_AT_6FT - BEACON_ADC_AT_16FT);
+    return (uint8_t) (BEACON_DISTANCE_MIN_FT +
+            ((numerator + (denominator / 2u)) / denominator));
+}
+
 uint8_t RobotSensors_IsTapeOn(TapeSensor_t sensor)
 {
     uint8_t reading;
@@ -116,11 +143,8 @@ uint8_t RobotSensors_IsTapeOn(TapeSensor_t sensor)
 
 uint8_t RobotSensors_IsSolenoidOn(SolenoidSensor_t sensor)
 {
-    if (RobotPlugPlay_IsSolenoidADCEnabled((uint8_t) sensor) == FALSE) {
-        return FALSE;
-    }
-    return IsThresholdActive(RobotSensors_ReadSolenoidADC(sensor),
-            SOLENOID_ON_ADC_THRESHOLD, SOLENOID_ON_IS_HIGH);
+    (void) sensor;
+    return FALSE;
 }
 
 uint8_t RobotSensors_IsBumpOn(BumpSensor_t sensor)
@@ -132,6 +156,24 @@ uint8_t RobotSensors_IsBumpOn(BumpSensor_t sensor)
     }
     reading = RobotSensors_ReadBumpDigital(sensor);
     return BUMP_ON_IS_HIGH ? (reading != 0u) : (reading == 0u);
+}
+
+static uint8_t TapeDigitalPort(TapeSensor_t sensor)
+{
+    switch (sensor) {
+    case TAPE_SENSOR_1:
+        return TAPE_SENSOR_1_PORT;
+    case TAPE_SENSOR_2:
+        return TAPE_SENSOR_2_PORT;
+    case TAPE_SENSOR_3:
+        return TAPE_SENSOR_3_PORT;
+    case TAPE_SENSOR_4:
+        return TAPE_SENSOR_4_PORT;
+    case TAPE_SENSOR_5:
+        return TAPE_SENSOR_5_PORT;
+    default:
+        return TAPE_SENSOR_1_PORT;
+    }
 }
 
 static uint16_t TapeDigitalPin(TapeSensor_t sensor)
@@ -149,26 +191,6 @@ static uint16_t TapeDigitalPin(TapeSensor_t sensor)
         return TAPE_SENSOR_5_PIN;
     default:
         return 0u;
-    }
-}
-
-static unsigned int SolenoidADPin(SolenoidSensor_t sensor)
-{
-    switch (sensor) {
-    case SOLENOID_SENSOR_1:
-        return SOLENOID_SENSOR_1_ADC_PIN;
-    case SOLENOID_SENSOR_2:
-        return SOLENOID_SENSOR_2_ADC_PIN;
-    case SOLENOID_SENSOR_3:
-        return SOLENOID_SENSOR_3_ADC_PIN;
-    case SOLENOID_SENSOR_4:
-        return SOLENOID_SENSOR_4_ADC_PIN;
-    case SOLENOID_SENSOR_5:
-        return SOLENOID_SENSOR_5_ADC_PIN;
-    case SOLENOID_SENSOR_6:
-        return SOLENOID_SENSOR_6_ADC_PIN;
-    default:
-        return SOLENOID_SENSOR_1_ADC_PIN;
     }
 }
 
@@ -204,10 +226,23 @@ static uint16_t BumpDigitalPin(BumpSensor_t sensor)
     }
 }
 
-static uint8_t IsThresholdActive(uint16_t reading, uint16_t threshold, uint8_t activeHigh)
+static uint16_t BeaconAveragePush(uint16_t reading)
 {
-    if (activeHigh) {
-        return (reading >= threshold) ? TRUE : FALSE;
+    if (beaconSampleCount < BEACON_AVERAGE_SAMPLE_COUNT) {
+        beaconSamples[beaconSampleIndex] = reading;
+        beaconSampleSum += reading;
+        beaconSampleCount++;
+    } else {
+        beaconSampleSum -= beaconSamples[beaconSampleIndex];
+        beaconSamples[beaconSampleIndex] = reading;
+        beaconSampleSum += reading;
     }
-    return (reading <= threshold) ? TRUE : FALSE;
+
+    beaconSampleIndex++;
+    if (beaconSampleIndex >= BEACON_AVERAGE_SAMPLE_COUNT) {
+        beaconSampleIndex = 0u;
+    }
+
+    return (uint16_t) ((beaconSampleSum + (beaconSampleCount / 2u)) /
+            beaconSampleCount);
 }
