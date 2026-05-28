@@ -93,9 +93,16 @@ static uint8_t BNO055Read8(uint8_t reg, uint8_t *value);
 static int16_t ReadS16(const uint8_t *buffer);
 static void StoreVector3(const uint8_t *buffer, int16_t vector[3]);
 static void StoreQuaternion(const uint8_t *buffer, int16_t quaternion[4]);
-static int16_t SelectConfiguredAxis(const int16_t vector[3]);
+static int16_t SelectAxis(const int16_t vector[3], uint8_t axis);
+static int16_t SelectSignedAxis(const int16_t vector[3], uint8_t axis, int8_t sign);
+static int16_t SelectHeadingEuler(const int16_t vector[3]);
+static int16_t SelectHeadingGyroAxis(const int16_t vector[3]);
+static int16_t SelectRobotXAccelAxis(const int16_t vector[3]);
+static int16_t SelectRobotYAccelAxis(const int16_t vector[3]);
 static uint8_t ReadHeadingAxisRaw(int16_t *headingRaw);
 static const char *HeadingAxisName(void);
+static const char *AxisName(uint8_t axis);
+static char AxisSignChar(int8_t sign);
 static int16_t ApplyDeadbandS16(int16_t value, int16_t deadband);
 static uint16_t AbsS16(int16_t value);
 static float NormalizeHeading(float heading);
@@ -233,7 +240,7 @@ void RobotIMU_Update(void)
 
     if (BNO055ReadLen(BNO055_EULER_H_LSB_REG, buffer, 6u) == TRUE) {
         StoreVector3(buffer, rawEuler);
-        headingDeg = NormalizeHeading(((float) SelectConfiguredAxis(rawEuler)) / 16.0f - headingOffsetDeg);
+        headingDeg = NormalizeHeading(((float) SelectHeadingEuler(rawEuler)) / 16.0f - headingOffsetDeg);
     } else {
         lastReadOk = FALSE;
     }
@@ -241,9 +248,9 @@ void RobotIMU_Update(void)
     if (BNO055ReadLen(BNO055_LINEAR_ACCEL_DATA_X_LSB_REG, buffer, 6u) == TRUE) {
         dt = ((float) elapsedMs) / 1000.0f;
         StoreVector3(buffer, rawLinearAccel);
-        axRaw = ReadS16(&buffer[0]);
-        ayRaw = ReadS16(&buffer[2]);
-        azRaw = ReadS16(&buffer[4]);
+        axRaw = SelectRobotXAccelAxis(rawLinearAccel);
+        ayRaw = SelectRobotYAccelAxis(rawLinearAccel);
+        azRaw = SelectHeadingGyroAxis(rawLinearAccel);
 
         int16_t axRawStill = axRaw;
         int16_t ayRawStill = ayRaw;
@@ -259,7 +266,7 @@ void RobotIMU_Update(void)
             gyRaw = rawGyro[1];
             gzRaw = rawGyro[2];
         }
-        headingGyroRaw = SelectConfiguredAxis(rawGyro);
+        headingGyroRaw = SelectHeadingGyroAxis(rawGyro);
 
         if (BNO055ReadLen(BNO055_ACCEL_DATA_X_LSB_REG, tempBuffer, 6u) == TRUE) {
             StoreVector3(tempBuffer, rawAccel);
@@ -477,9 +484,14 @@ void RobotIMU_PrintDebugSnapshot(void)
             (unsigned int) (rawCalib & 0x03u),
             (unsigned int) isStationary,
             (unsigned int) stationaryMs);
-    printf("[IMU] modeGuard=%s headingAxis=%s\r\n",
+    printf("[IMU] modeGuard=%s heading=EulerH gyro=%c%s robotX=%c%s robotY=%c%s\r\n",
             lastModeWasNDOF ? "NDOF" : "RECOVERING",
-            HeadingAxisName());
+            AxisSignChar(BNO055_HEADING_GYRO_SIGN),
+            AxisName(BNO055_HEADING_GYRO_AXIS),
+            AxisSignChar(BNO055_ROBOT_X_ACCEL_SIGN),
+            AxisName(BNO055_ROBOT_X_ACCEL_AXIS),
+            AxisSignChar(BNO055_ROBOT_Y_ACCEL_SIGN),
+            AxisName(BNO055_ROBOT_Y_ACCEL_AXIS));
 
     printf("[IMU] eul H/R/P=");
     PrintFixedQ4(rawEuler[0]);
@@ -883,17 +895,49 @@ static void StoreQuaternion(const uint8_t *buffer, int16_t quaternion[4])
     quaternion[3] = ReadS16(&buffer[6]);
 }
 
-static int16_t SelectConfiguredAxis(const int16_t vector[3])
+static int16_t SelectAxis(const int16_t vector[3], uint8_t axis)
 {
-#if BNO055_HEADING_AXIS == BNO055_AXIS_X
-    return vector[0];
-#elif BNO055_HEADING_AXIS == BNO055_AXIS_Y
-    return vector[1];
-#elif BNO055_HEADING_AXIS == BNO055_AXIS_Z
-    return vector[2];
-#else
-    return vector[0];
-#endif
+    switch (axis) {
+    case BNO055_AXIS_X:
+        return vector[0];
+    case BNO055_AXIS_Y:
+        return vector[1];
+    case BNO055_AXIS_Z:
+        return vector[2];
+    default:
+        return vector[0];
+    }
+}
+
+static int16_t SelectSignedAxis(const int16_t vector[3], uint8_t axis, int8_t sign)
+{
+    int16_t value = SelectAxis(vector, axis);
+
+    return (sign < 0) ? (int16_t) -value : value;
+}
+
+static int16_t SelectHeadingEuler(const int16_t vector[3])
+{
+    return SelectSignedAxis(vector, BNO055_HEADING_EULER_INDEX,
+            BNO055_HEADING_EULER_SIGN);
+}
+
+static int16_t SelectHeadingGyroAxis(const int16_t vector[3])
+{
+    return SelectSignedAxis(vector, BNO055_HEADING_GYRO_AXIS,
+            BNO055_HEADING_GYRO_SIGN);
+}
+
+static int16_t SelectRobotXAccelAxis(const int16_t vector[3])
+{
+    return SelectSignedAxis(vector, BNO055_ROBOT_X_ACCEL_AXIS,
+            BNO055_ROBOT_X_ACCEL_SIGN);
+}
+
+static int16_t SelectRobotYAccelAxis(const int16_t vector[3])
+{
+    return SelectSignedAxis(vector, BNO055_ROBOT_Y_ACCEL_AXIS,
+            BNO055_ROBOT_Y_ACCEL_SIGN);
 }
 
 static uint8_t ReadHeadingAxisRaw(int16_t *headingRaw)
@@ -905,21 +949,32 @@ static uint8_t ReadHeadingAxisRaw(int16_t *headingRaw)
     }
 
     StoreVector3(buffer, rawEuler);
-    *headingRaw = SelectConfiguredAxis(rawEuler);
+    *headingRaw = SelectHeadingEuler(rawEuler);
     return TRUE;
 }
 
 static const char *HeadingAxisName(void)
 {
-#if BNO055_HEADING_AXIS == BNO055_AXIS_X
-    return "X";
-#elif BNO055_HEADING_AXIS == BNO055_AXIS_Y
-    return "Y";
-#elif BNO055_HEADING_AXIS == BNO055_AXIS_Z
-    return "Z";
-#else
-    return "?";
-#endif
+    return "EulerH";
+}
+
+static const char *AxisName(uint8_t axis)
+{
+    switch (axis) {
+    case BNO055_AXIS_X:
+        return "X";
+    case BNO055_AXIS_Y:
+        return "Y";
+    case BNO055_AXIS_Z:
+        return "Z";
+    default:
+        return "?";
+    }
+}
+
+static char AxisSignChar(int8_t sign)
+{
+    return (sign < 0) ? '-' : '+';
 }
 
 static int16_t ApplyDeadbandS16(int16_t value, int16_t deadband)

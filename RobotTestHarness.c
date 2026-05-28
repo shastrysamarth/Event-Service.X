@@ -11,17 +11,40 @@
 #include "RobotPins.h"
 #include "RobotPlugPlay.h"
 #include "RobotSensors.h"
+#include "RobotStepper.h"
 #include "IO_Ports.h"
 #include "serial.h"
 #include "timers.h"
 
 #include <stdio.h>
 
+#if defined(ROBOT_MOTOR_SENSOR_TEST) || defined(ROBOT_KEYBOARD_TEST)
+static uint8_t CommandUsesStrafeSpeed(const char *commandName);
+
+static uint8_t CommandUsesStrafeSpeed(const char *commandName)
+{
+    if (commandName == NULL) {
+        return FALSE;
+    }
+    if ((commandName[0] == 's') && (commandName[1] == 't') &&
+            (commandName[2] == 'r')) {
+        return TRUE;
+    }
+    if ((commandName[0] == 'd') && (commandName[1] == 'e') &&
+            (commandName[2] == 'm') && (commandName[6] == 's') &&
+            (commandName[7] == 't') && (commandName[8] == 'r')) {
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
 #ifdef ROBOT_MOTOR_SENSOR_TEST
 #define BENCH_SENSOR_PERIOD_MS 250u
+#define STEPPER_BENCH_BURST_STEPS 20u
 
 typedef enum {
-    BENCH_SENSOR_NONE,
+    BENCH_SENSOR_NONE = 0,
     BENCH_SENSOR_TAPE1,
     BENCH_SENSOR_TAPE2,
     BENCH_SENSOR_TAPE3,
@@ -32,23 +55,42 @@ typedef enum {
     BENCH_SENSOR_BUMP_RR,
     BENCH_SENSOR_BUMP_RL,
     BENCH_SENSOR_BEACON,
-    BENCH_SENSOR_ALL,
+    BENCH_SENSOR_COUNT,
 } BenchSensor_t;
+
+#define BENCH_SENSOR_MASK(sensor) (1u << ((uint8_t) (sensor)))
+#define BENCH_SENSOR_ALL_MASK (BENCH_SENSOR_MASK(BENCH_SENSOR_TAPE1) | \
+    BENCH_SENSOR_MASK(BENCH_SENSOR_TAPE2) | \
+    BENCH_SENSOR_MASK(BENCH_SENSOR_TAPE3) | \
+    BENCH_SENSOR_MASK(BENCH_SENSOR_TAPE4) | \
+    BENCH_SENSOR_MASK(BENCH_SENSOR_TAPE5) | \
+    BENCH_SENSOR_MASK(BENCH_SENSOR_BUMP_FR) | \
+    BENCH_SENSOR_MASK(BENCH_SENSOR_BUMP_FL) | \
+    BENCH_SENSOR_MASK(BENCH_SENSOR_BUMP_RR) | \
+    BENCH_SENSOR_MASK(BENCH_SENSOR_BUMP_RL) | \
+    BENCH_SENSOR_MASK(BENCH_SENSOR_BEACON))
 
 static void BenchPrintHelp(void);
 static void BenchHandleKey(char key);
 static void BenchHandleMotorKey(char key);
 static uint8_t BenchHandleSensorKey(char key);
+static void BenchToggleSensor(BenchSensor_t sensor, const char *name);
+static const char *BenchRunDriveCommand(char key);
+static void BenchReapplyDriveCommand(const char *changeName);
 static void BenchPrintMotorCommand(const char *commandName);
+static void BenchPrintWheelPattern(const char *commandName,
+        const char *pattern);
 static void BenchRunMotorSequenceStep(void);
-static void BenchPrintSelectedSensor(void);
+static void BenchPrintActiveSensors(void);
+static void BenchPrintSensor(BenchSensor_t sensor);
 static void BenchPrintTape(TapeSensor_t sensor, const char *name, const char *pinLabel);
 static void BenchPrintBump(BumpSensor_t sensor, const char *name, const char *pinLabel);
 static void BenchPrintBeacon(void);
 
-static float benchMotorSpeedIPS = MOTOR_SPEED_IPS;
+static float benchMotorSpeedIPS = MOTOR_BENCH_SPEED_IPS;
 static uint8_t benchMotorSequenceStep = 0u;
-static BenchSensor_t selectedSensor = BENCH_SENSOR_NONE;
+static uint16_t activeSensorMask = 0u;
+static char activeDriveCommandKey = '\0';
 
 void RobotTestHarness_RunMotorSensorBench(void)
 {
@@ -56,7 +98,6 @@ void RobotTestHarness_RunMotorSensorBench(void)
 
     TIMERS_Init();
     BenchPrintHelp();
-    selectedSensor = BENCH_SENSOR_ALL;
     lastSensorPrintTime = TIMERS_GetTime();
 
     for (;;) {
@@ -71,9 +112,9 @@ void RobotTestHarness_RunMotorSensorBench(void)
         }
 
         now = TIMERS_GetTime();
-        if ((selectedSensor != BENCH_SENSOR_NONE) &&
+        if ((activeSensorMask != 0u) &&
                 ((unsigned int) (now - lastSensorPrintTime) >= BENCH_SENSOR_PERIOD_MS)) {
-            BenchPrintSelectedSensor();
+            BenchPrintActiveSensors();
             lastSensorPrintTime = now;
         }
     }
@@ -82,15 +123,28 @@ void RobotTestHarness_RunMotorSensorBench(void)
 static void BenchPrintHelp(void)
 {
     printf("\r\n[BENCH] Direct motor/sensor harness, no HSM\r\n");
-    printf("[BENCH] ? help, ! hardware pin map, . print selected sensor once\r\n");
-    printf("[BENCH] p stream all sensors, l pause sensor stream\r\n");
-    printf("[BENCH] t/y/u/i/o stream tape sensors 1/2/3/4/5\r\n");
-    printf("[BENCH] f/g/h/j stream bump FR/FL/RR/RL\r\n");
-    printf("[BENCH] b stream beacon ADC and distance bucket\r\n");
-    printf("[MOTOR] w forward, s reverse, a strafe left, d strafe right, x stop\r\n");
-    printf("[MOTOR] q/e turn left/right about center\r\n");
-    printf("[MOTOR] 1/2 front pivot, 3/4 back pivot, 5/6 left pivot, 7/8 right pivot\r\n");
+    printf("[BENCH] no sensor streaming at startup\r\n");
+    printf("[BENCH] ? help, ! hardware pin map, . print active sensors once\r\n");
+    printf("[SENSOR] toggle streams: t/y/u/i/o tape 1/2/3/4/5\r\n");
+    printf("[SENSOR] toggle streams: f/g/h/j bump FR/FL/RR/RL, b beacon\r\n");
+    printf("[SENSOR] p toggle all sensors, l turn all sensor streams off\r\n");
+    printf("[MOTOR] 1 forward, 2 reverse, 3 strafe left, 4 strafe right\r\n");
+    printf("[MOTOR] 5 turn left center, 6 turn right center\r\n");
+    printf("[MOTOR] 7/8 turn left/right about front center\r\n");
+    printf("[MOTOR] 9/0 turn left/right about back center\r\n");
+    printf("[MOTOR] q/e turn left/right about left center\r\n");
+    printf("[MOTOR] a/d turn left/right about right center\r\n");
+    printf("[MOTOR] per-wheel: F/G FL fwd/rev, H/J FR fwd/rev\r\n");
+    printf("[MOTOR] per-wheel: K/L RL fwd/rev, M/N RR fwd/rev\r\n");
+    printf("[MOTOR] strafe right expected wheel signs: FL- FR+ RL+ RR-\r\n");
+    printf("[MOTOR] strafe left expected wheel signs:  FL+ FR- RL- RR+\r\n");
     printf("[SHOOTER] v shooter ON, c shooter OFF; x stops drive and shooter\r\n");
+    printf("[STEPPER] [ one step forward, ] one step reverse\r\n");
+    printf("[STEPPER] { %u steps forward, } %u steps reverse; enable is hard-wired 3.3V\r\n",
+            (unsigned int) STEPPER_BENCH_BURST_STEPS,
+            (unsigned int) STEPPER_BENCH_BURST_STEPS);
+    printf("[MOTOR] strafe commands use fixed %u in/s\r\n",
+            (unsigned int) STRAFE_SPEED_IPS);
     printf("[MOTOR] + speed up, - speed down, r reset speed, n next demo command\r\n");
     BenchPrintMotorCommand("current speed");
     printf("\r\n");
@@ -114,122 +168,80 @@ static uint8_t BenchHandleSensorKey(char key)
         RobotPlugPlay_PrintConfig();
         return TRUE;
     case '.':
-        BenchPrintSelectedSensor();
+        BenchPrintActiveSensors();
         return TRUE;
     case 'p':
-        selectedSensor = BENCH_SENSOR_ALL;
-        BenchPrintSelectedSensor();
+        activeSensorMask = (activeSensorMask == BENCH_SENSOR_ALL_MASK) ? 0u :
+                BENCH_SENSOR_ALL_MASK;
+        printf("[SENSOR] all streams %s\r\n",
+                (activeSensorMask == 0u) ? "OFF" : "ON");
         return TRUE;
     case 'l':
-        selectedSensor = BENCH_SENSOR_NONE;
-        printf("[SENSOR] stream paused\r\n");
+        activeSensorMask = 0u;
+        printf("[SENSOR] all streams OFF\r\n");
         return TRUE;
     case 't':
-        selectedSensor = BENCH_SENSOR_TAPE1;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_TAPE1, "tape1");
         return TRUE;
     case 'y':
-        selectedSensor = BENCH_SENSOR_TAPE2;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_TAPE2, "tape2");
         return TRUE;
     case 'u':
-        selectedSensor = BENCH_SENSOR_TAPE3;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_TAPE3, "tape3");
         return TRUE;
     case 'i':
-        selectedSensor = BENCH_SENSOR_TAPE4;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_TAPE4, "tape4");
         return TRUE;
     case 'o':
-        selectedSensor = BENCH_SENSOR_TAPE5;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_TAPE5, "tape5");
         return TRUE;
     case 'f':
-        selectedSensor = BENCH_SENSOR_BUMP_FR;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_BUMP_FR, "bumpFR");
         return TRUE;
     case 'g':
-        selectedSensor = BENCH_SENSOR_BUMP_FL;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_BUMP_FL, "bumpFL");
         return TRUE;
     case 'h':
-        selectedSensor = BENCH_SENSOR_BUMP_RR;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_BUMP_RR, "bumpRR");
         return TRUE;
     case 'j':
-        selectedSensor = BENCH_SENSOR_BUMP_RL;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_BUMP_RL, "bumpRL");
         return TRUE;
     case 'b':
-        selectedSensor = BENCH_SENSOR_BEACON;
-        BenchPrintSelectedSensor();
+        BenchToggleSensor(BENCH_SENSOR_BEACON, "beacon");
         return TRUE;
     default:
         return FALSE;
     }
 }
 
+static void BenchToggleSensor(BenchSensor_t sensor, const char *name)
+{
+    uint16_t mask = BENCH_SENSOR_MASK(sensor);
+
+    activeSensorMask ^= mask;
+    printf("[SENSOR] %s stream %s\r\n", name,
+            (activeSensorMask & mask) ? "ON" : "OFF");
+    if (activeSensorMask & mask) {
+        BenchPrintSensor(sensor);
+    }
+}
+
 static void BenchHandleMotorKey(char key)
 {
+    const char *driveCommandName;
+
+    driveCommandName = BenchRunDriveCommand(key);
+    if (driveCommandName != NULL) {
+        activeDriveCommandKey = key;
+        BenchPrintMotorCommand(driveCommandName);
+        return;
+    }
+
     switch (key) {
-    case 'w':
-        RobotMotion_Forward(benchMotorSpeedIPS);
-        BenchPrintMotorCommand("forward");
-        break;
-    case 's':
-        RobotMotion_Reverse(benchMotorSpeedIPS);
-        BenchPrintMotorCommand("reverse");
-        break;
-    case 'a':
-        RobotMotion_StrafeLeft(benchMotorSpeedIPS);
-        BenchPrintMotorCommand("strafe left");
-        break;
-    case 'd':
-        RobotMotion_StrafeRight(benchMotorSpeedIPS);
-        BenchPrintMotorCommand("strafe right");
-        break;
-    case 'q':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn left about center");
-        break;
-    case 'e':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn right about center");
-        break;
-    case '1':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_FRONT_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn left about front center");
-        break;
-    case '2':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_FRONT_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn right about front center");
-        break;
-    case '3':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_BACK_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn left about back center");
-        break;
-    case '4':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_BACK_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn right about back center");
-        break;
-    case '5':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_LEFT_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn left about left center");
-        break;
-    case '6':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_LEFT_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn right about left center");
-        break;
-    case '7':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_RIGHT_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn left about right center");
-        break;
-    case '8':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_RIGHT_CENTER, benchMotorSpeedIPS);
-        BenchPrintMotorCommand("turn right about right center");
-        break;
     case 'x':
         RobotHardware_StopAllOutputs();
+        activeDriveCommandKey = '\0';
         printf("[MOTOR] stop\r\n");
         break;
     case 'v':
@@ -242,21 +254,41 @@ static void BenchHandleMotorKey(char key)
         RobotLauncher_StopShooter();
         printf("[SHOOTER] OFF\r\n");
         break;
+    case '[':
+        RobotStepper_Step(1u, TRUE);
+        printf("[STEPPER] 1 step forward on %s\r\n", STEPPER_PIN_LABEL);
+        break;
+    case ']':
+        RobotStepper_Step(1u, FALSE);
+        printf("[STEPPER] 1 step reverse on %s\r\n", STEPPER_PIN_LABEL);
+        break;
+    case '{':
+        RobotStepper_Step(STEPPER_BENCH_BURST_STEPS, TRUE);
+        printf("[STEPPER] %u steps forward on %s\r\n",
+                (unsigned int) STEPPER_BENCH_BURST_STEPS,
+                STEPPER_PIN_LABEL);
+        break;
+    case '}':
+        RobotStepper_Step(STEPPER_BENCH_BURST_STEPS, FALSE);
+        printf("[STEPPER] %u steps reverse on %s\r\n",
+                (unsigned int) STEPPER_BENCH_BURST_STEPS,
+                STEPPER_PIN_LABEL);
+        break;
     case '+':
     case '=':
         benchMotorSpeedIPS += 1.0f;
-        BenchPrintMotorCommand("speed up");
+        BenchReapplyDriveCommand("speed up");
         break;
     case '-':
     case '_':
         if (benchMotorSpeedIPS > 1.0f) {
             benchMotorSpeedIPS -= 1.0f;
         }
-        BenchPrintMotorCommand("speed down");
+        BenchReapplyDriveCommand("speed down");
         break;
     case 'r':
-        benchMotorSpeedIPS = MOTOR_SPEED_IPS;
-        BenchPrintMotorCommand("reset speed");
+        benchMotorSpeedIPS = MOTOR_BENCH_SPEED_IPS;
+        BenchReapplyDriveCommand("reset speed");
         break;
     case 'n':
         BenchRunMotorSequenceStep();
@@ -267,10 +299,110 @@ static void BenchHandleMotorKey(char key)
     }
 }
 
+static const char *BenchRunDriveCommand(char key)
+{
+    switch (key) {
+    case '1':
+        RobotMotion_Forward(benchMotorSpeedIPS);
+        return "forward";
+    case '2':
+        RobotMotion_Reverse(benchMotorSpeedIPS);
+        return "reverse";
+    case '3':
+        RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
+        BenchPrintWheelPattern("strafe left", "FL+ FR- RL- RR+");
+        return "strafe left";
+    case '4':
+        RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+        BenchPrintWheelPattern("strafe right", "FL- FR+ RL+ RR-");
+        return "strafe right";
+    case '5':
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, benchMotorSpeedIPS);
+        return "turn left about center";
+    case '6':
+        RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, benchMotorSpeedIPS);
+        return "turn right about center";
+    case '7':
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_FRONT_CENTER, benchMotorSpeedIPS);
+        return "turn left about front center";
+    case '8':
+        RobotMotion_TurnRightAbout(TURN_PIVOT_FRONT_CENTER, benchMotorSpeedIPS);
+        return "turn right about front center";
+    case '9':
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_BACK_CENTER, benchMotorSpeedIPS);
+        return "turn left about back center";
+    case '0':
+        RobotMotion_TurnRightAbout(TURN_PIVOT_BACK_CENTER, benchMotorSpeedIPS);
+        return "turn right about back center";
+    case 'q':
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_LEFT_CENTER, benchMotorSpeedIPS);
+        return "turn left about left center";
+    case 'e':
+        RobotMotion_TurnRightAbout(TURN_PIVOT_LEFT_CENTER, benchMotorSpeedIPS);
+        return "turn right about left center";
+    case 'a':
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_RIGHT_CENTER, benchMotorSpeedIPS);
+        return "turn left about right center";
+    case 'd':
+        RobotMotion_TurnRightAbout(TURN_PIVOT_RIGHT_CENTER, benchMotorSpeedIPS);
+        return "turn right about right center";
+    case 'F':
+        RobotMotion_TestWheelSpeeds(benchMotorSpeedIPS, 0.0f, 0.0f, 0.0f);
+        return "FL only forward";
+    case 'G':
+        RobotMotion_TestWheelSpeeds(-benchMotorSpeedIPS, 0.0f, 0.0f, 0.0f);
+        return "FL only reverse";
+    case 'H':
+        RobotMotion_TestWheelSpeeds(0.0f, benchMotorSpeedIPS, 0.0f, 0.0f);
+        return "FR only forward";
+    case 'J':
+        RobotMotion_TestWheelSpeeds(0.0f, -benchMotorSpeedIPS, 0.0f, 0.0f);
+        return "FR only reverse";
+    case 'K':
+        RobotMotion_TestWheelSpeeds(0.0f, 0.0f, benchMotorSpeedIPS, 0.0f);
+        return "RL only forward";
+    case 'L':
+        RobotMotion_TestWheelSpeeds(0.0f, 0.0f, -benchMotorSpeedIPS, 0.0f);
+        return "RL only reverse";
+    case 'M':
+        RobotMotion_TestWheelSpeeds(0.0f, 0.0f, 0.0f, benchMotorSpeedIPS);
+        return "RR only forward";
+    case 'N':
+        RobotMotion_TestWheelSpeeds(0.0f, 0.0f, 0.0f, -benchMotorSpeedIPS);
+        return "RR only reverse";
+    default:
+        return NULL;
+    }
+}
+
+static void BenchReapplyDriveCommand(const char *changeName)
+{
+    const char *driveCommandName;
+
+    if (activeDriveCommandKey == '\0') {
+        BenchPrintMotorCommand(changeName);
+        return;
+    }
+
+    driveCommandName = BenchRunDriveCommand(activeDriveCommandKey);
+    printf("[MOTOR] %s; reapplied %s at %u in/s\r\n",
+            changeName,
+            driveCommandName,
+            (unsigned int) (CommandUsesStrafeSpeed(driveCommandName) ?
+            STRAFE_SPEED_IPS : benchMotorSpeedIPS));
+}
+
 static void BenchPrintMotorCommand(const char *commandName)
 {
     printf("[MOTOR] %s at %u in/s\r\n", commandName,
-            (unsigned int) benchMotorSpeedIPS);
+            (unsigned int) (CommandUsesStrafeSpeed(commandName) ?
+            STRAFE_SPEED_IPS : benchMotorSpeedIPS));
+}
+
+static void BenchPrintWheelPattern(const char *commandName,
+        const char *pattern)
+{
+    printf("[MOTOR] %s wheel signs: %s\r\n", commandName, pattern);
 }
 
 static void BenchRunMotorSequenceStep(void)
@@ -285,11 +417,11 @@ static void BenchRunMotorSequenceStep(void)
         BenchPrintMotorCommand("demo: reverse");
         break;
     case 2u:
-        RobotMotion_StrafeRight(benchMotorSpeedIPS);
+        RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
         BenchPrintMotorCommand("demo: strafe right");
         break;
     case 3u:
-        RobotMotion_StrafeLeft(benchMotorSpeedIPS);
+        RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
         BenchPrintMotorCommand("demo: strafe left");
         break;
     case 4u:
@@ -344,9 +476,25 @@ static void BenchRunMotorSequenceStep(void)
     }
 }
 
-static void BenchPrintSelectedSensor(void)
+static void BenchPrintActiveSensors(void)
 {
-    switch (selectedSensor) {
+    uint8_t sensor;
+
+    if (activeSensorMask == 0u) {
+        printf("[SENSOR] no active streams\r\n");
+        return;
+    }
+
+    for (sensor = 1u; sensor < BENCH_SENSOR_COUNT; sensor++) {
+        if (activeSensorMask & BENCH_SENSOR_MASK(sensor)) {
+            BenchPrintSensor((BenchSensor_t) sensor);
+        }
+    }
+}
+
+static void BenchPrintSensor(BenchSensor_t sensor)
+{
+    switch (sensor) {
     case BENCH_SENSOR_TAPE1:
         BenchPrintTape(TAPE_SENSOR_1, "tape1", TAPE_SENSOR_1_PIN_LABEL);
         break;
@@ -377,20 +525,7 @@ static void BenchPrintSelectedSensor(void)
     case BENCH_SENSOR_BEACON:
         BenchPrintBeacon();
         break;
-    case BENCH_SENSOR_ALL:
-        BenchPrintTape(TAPE_SENSOR_1, "tape1", TAPE_SENSOR_1_PIN_LABEL);
-        BenchPrintTape(TAPE_SENSOR_2, "tape2", TAPE_SENSOR_2_PIN_LABEL);
-        BenchPrintTape(TAPE_SENSOR_3, "tape3", TAPE_SENSOR_3_PIN_LABEL);
-        BenchPrintTape(TAPE_SENSOR_4, "tape4", TAPE_SENSOR_4_PIN_LABEL);
-        BenchPrintTape(TAPE_SENSOR_5, "tape5", TAPE_SENSOR_5_PIN_LABEL);
-        BenchPrintBump(BUMP_SENSOR_1, "bumpFR", BUMP_SENSOR_1_PIN_LABEL);
-        BenchPrintBump(BUMP_SENSOR_2, "bumpFL", BUMP_SENSOR_2_PIN_LABEL);
-        BenchPrintBump(BUMP_SENSOR_3, "bumpRR", BUMP_SENSOR_3_PIN_LABEL);
-        BenchPrintBump(BUMP_SENSOR_4, "bumpRL", BUMP_SENSOR_4_PIN_LABEL);
-        BenchPrintBeacon();
-        break;
     default:
-        printf("[SENSOR] none selected\r\n");
         break;
     }
 }
@@ -696,11 +831,11 @@ static uint8_t HandleMotorTestKey(char key)
         PrintMotorCommand("reverse");
         break;
     case 'a':
-        RobotMotion_StrafeLeft(motorTestSpeedIPS);
+        RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
         PrintMotorCommand("strafe left");
         break;
     case 'd':
-        RobotMotion_StrafeRight(motorTestSpeedIPS);
+        RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
         PrintMotorCommand("strafe right");
         break;
     case 'q':
@@ -784,6 +919,8 @@ static void PrintMotorTestHelp(void)
     printf("[MOTOR] 3/4 turn left/right about back center\r\n");
     printf("[MOTOR] 5/6 turn left/right about left center\r\n");
     printf("[MOTOR] 7/8 turn left/right about right center\r\n");
+    printf("[MOTOR] strafe commands use fixed %u in/s\r\n",
+            (unsigned int) STRAFE_SPEED_IPS);
     printf("[MOTOR] + speed up, - speed down, r reset speed, n next demo command\r\n");
     PrintMotorCommand("current speed");
     printf("\r\n");
@@ -792,7 +929,8 @@ static void PrintMotorTestHelp(void)
 static void PrintMotorCommand(const char *commandName)
 {
     printf("[MOTOR] %s at %u in/s\r\n", commandName,
-            (unsigned int) motorTestSpeedIPS);
+            (unsigned int) (CommandUsesStrafeSpeed(commandName) ?
+            STRAFE_SPEED_IPS : motorTestSpeedIPS));
 }
 
 static void RunMotorSequenceStep(void)
@@ -807,11 +945,11 @@ static void RunMotorSequenceStep(void)
         PrintMotorCommand("demo: reverse");
         break;
     case 2u:
-        RobotMotion_StrafeRight(motorTestSpeedIPS);
+        RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
         PrintMotorCommand("demo: strafe right");
         break;
     case 3u:
-        RobotMotion_StrafeLeft(motorTestSpeedIPS);
+        RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
         PrintMotorCommand("demo: strafe left");
         break;
     case 4u:

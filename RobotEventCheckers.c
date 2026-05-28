@@ -14,6 +14,8 @@
 #include "RobotTestHarness.h"
 #include "ShootingSubHSM.h"
 
+#include <stdio.h>
+
 typedef struct {
     uint8_t tape[5];
     uint8_t solenoid[6];
@@ -35,6 +37,9 @@ static uint8_t PostOnChange(uint8_t current, uint8_t *previous,
 static uint8_t IsBeaconSearchActive(void);
 static uint8_t IsRobotMisaligned(void);
 static float AbsFloat(float value);
+static void LogTapeInitial(uint8_t sensorNumber, uint8_t raw, uint8_t onTape);
+static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape,
+        ES_EventTyp_t eventType);
 
 void InitRobotEventCheckers(void)
 {
@@ -42,6 +47,9 @@ void InitRobotEventCheckers(void)
 
     for (i = 0; i < 5u; i++) {
         last.tape[i] = RobotSensors_IsTapeOn((TapeSensor_t) (i + 1u));
+        LogTapeInitial(i + 1u,
+                RobotSensors_ReadTapeDigital((TapeSensor_t) (i + 1u)),
+                last.tape[i]);
     }
     for (i = 0; i < 6u; i++) {
         last.solenoid[i] = RobotSensors_IsSolenoidOn((SolenoidSensor_t) (i + 1u));
@@ -152,10 +160,21 @@ uint8_t CheckTapeEvents(void)
         if ((i == 4u) && (current == TRUE) && (last.tape[i] == FALSE) &&
                 (NavigateToISZ_IsCountingTape5() == TRUE)) {
             last.tape[i] = current;
+            LogTapeChange(i + 1u,
+                    RobotSensors_ReadTapeDigital((TapeSensor_t) (i + 1u)),
+                    current,
+                    TapeSensor5LowToHighEvent);
             return PostEvent(TapeSensor5LowToHighEvent, 5u);
         }
-        if (PostOnChange(current, &last.tape[i], onEvents[i], offEvents[i], (uint16_t) (i + 1u))) {
-            return TRUE;
+        if (current != last.tape[i]) {
+            ES_EventTyp_t eventType = current ? onEvents[i] : offEvents[i];
+
+            LogTapeChange(i + 1u,
+                    RobotSensors_ReadTapeDigital((TapeSensor_t) (i + 1u)),
+                    current,
+                    eventType);
+            last.tape[i] = current;
+            return PostEvent(eventType, (uint16_t) (i + 1u));
         }
     }
 
@@ -330,4 +349,37 @@ static uint8_t IsRobotMisaligned(void)
 static float AbsFloat(float value)
 {
     return (value < 0.0f) ? -value : value;
+}
+
+static void LogTapeInitial(uint8_t sensorNumber, uint8_t raw, uint8_t onTape)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[TAPE] init sensor%u raw=%u line=%s onTape=%u\r\n",
+            (unsigned int) sensorNumber,
+            (unsigned int) raw,
+            raw ? "HIGH" : "LOW",
+            (unsigned int) onTape);
+#else
+    (void) sensorNumber;
+    (void) raw;
+    (void) onTape;
+#endif
+}
+
+static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape,
+        ES_EventTyp_t eventType)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[TAPE] sensor%u raw=%u line=%s onTape=%u -> %s\r\n",
+            (unsigned int) sensorNumber,
+            (unsigned int) raw,
+            raw ? "HIGH" : "LOW",
+            (unsigned int) onTape,
+            EventNames[eventType]);
+#else
+    (void) sensorNumber;
+    (void) raw;
+    (void) onTape;
+    (void) eventType;
+#endif
 }

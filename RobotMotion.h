@@ -13,6 +13,8 @@ void RobotMotion_StrafeRight(float speedIPS);
 void RobotMotion_StrafeLeft(float speedIPS);
 void RobotMotion_TurnLeftAbout(TurnPivot_t pivot, float speedIPS);
 void RobotMotion_TurnRightAbout(TurnPivot_t pivot, float speedIPS);
+void RobotMotion_TestWheelSpeeds(float frontLeftIPS, float frontRightIPS,
+        float rearLeftIPS, float rearRightIPS);
 
 void RobotMotion_StartDistanceMove(DistanceAxis_t axis, int8_t direction, float targetInches);
 void RobotMotion_StopDistanceMove(void);

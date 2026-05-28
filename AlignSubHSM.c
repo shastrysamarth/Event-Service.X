@@ -161,9 +161,9 @@ void AlignSubHSM_UpdateControl(void)
             if (AbsFloat(error) <= POSITION_THRESHOLD_IN) {
                 RobotMotion_Stop();
             } else if (error > 0.0f) {
-                RobotMotion_StrafeRight(ALIGN_SPEED_IPS);
+                RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             } else {
-                RobotMotion_StrafeLeft(ALIGN_SPEED_IPS);
+                RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             }
         }
     }

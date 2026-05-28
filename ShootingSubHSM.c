@@ -60,7 +60,7 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     case SearchBeaconMaxState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_StrafeRight(MOTOR_SPEED_IPS);
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             break;
         case MaxSignalFoundEvent:
             maxBeaconADC = ThisEvent.EventParam;

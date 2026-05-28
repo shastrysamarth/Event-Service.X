@@ -101,7 +101,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case InitialStrafeLeftState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_StrafeLeft(MOTOR_SPEED_IPS);
+            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             LatchInitialStrafeYRefOnce();
             break;
         case TapeSensor2OnEvent:
@@ -126,7 +126,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case InitialStrafeRightState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_StrafeRight(MOTOR_SPEED_IPS);
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             LatchInitialStrafeYRefOnce();
             break;
         case TapeSensor2OnEvent:
@@ -204,7 +204,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case StrafeRight1State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_StrafeRight(MOTOR_SPEED_IPS);
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             break;
         case TapeSensor5LowToHighEvent:
             CountTape5Crossing();
@@ -245,7 +245,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case StrafeLeft1State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_StrafeLeft(MOTOR_SPEED_IPS);
+            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             break;
         case TapeSensor5LowToHighEvent:
             CountTape5Crossing();
@@ -370,7 +370,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case StrafeLeft2State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_StrafeLeft(MOTOR_SPEED_IPS);
+            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             break;
         case TapeSensor1OnEvent:
             RobotMotion_Stop();
@@ -395,7 +395,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case StrafeRight2State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_StrafeRight(MOTOR_SPEED_IPS);
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             break;
         case TapeSensor1OnEvent:
             RobotMotion_Stop();

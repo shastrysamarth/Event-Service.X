@@ -176,7 +176,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case SlowMoveForwardState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_Forward(MOTOR_SPEED_IPS / 2.0f);
+            RobotMotion_Forward(MOTOR_SPEED_IPS);
             break;
         case TapeSensor4OnEvent:
             boundary_choice = BOUNDARY_TOP;
@@ -217,7 +217,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case TurnRightState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+            RobotMotion_TurnRightAbout(TURN_PIVOT_RIGHT_CENTER, TURN_SPEED_IPS);
             break;
         case TapeSensor4OffEvent:
             nextState = SlowMoveForwardState;
@@ -256,7 +256,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case TurnLeftState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+            RobotMotion_TurnLeftAbout(TURN_PIVOT_LEFT_CENTER, TURN_SPEED_IPS);
             break;
         case TapeSensor3OffEvent:
             nextState = SlowMoveForwardState;

@@ -8,6 +8,8 @@
 #include "RobotMotion.h"
 #include "RobotPlugPlay.h"
 #include "RobotSensors.h"
+#include "RobotStepper.h"
+#include "RobotLauncher.h"
 #include "ShootingSubHSM.h"
 
 #include <stdio.h>
@@ -75,9 +77,11 @@ void RobotDebug_PrintModuleVariables(void)
             AlignSubHSM_GetStateName(),
             MovementAxisName(AlignSubHSM_GetAxis()));
     PrintFixedValue("[VAR] Align.headingError", RobotIMU_GetHeadingErrorToZeroDeg(), "deg");
-    printf("[VAR] Shooting.state=%s maxBeaconADC=%u\r\n",
+    printf("[VAR] Shooting.state=%s maxBeaconADC=%u targetStep=%d currentStep=%d\r\n",
             ShootingSubHSM_GetStateName(),
-            (unsigned int) ShootingSubHSM_GetMaxBeaconADC());
+            (unsigned int) ShootingSubHSM_GetMaxBeaconADC(),
+            (int) RobotLauncher_GetTargetStepForBeaconADC(ShootingSubHSM_GetMaxBeaconADC()),
+            (int) RobotStepper_GetPosition());
     {
         uint16_t beaconRaw = RobotSensors_ReadBeaconRawADC();
         uint16_t beaconSmooth = RobotSensors_ReadBeaconADC();

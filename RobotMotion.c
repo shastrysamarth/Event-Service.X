@@ -78,6 +78,12 @@ void RobotMotion_StrafeLeft(float speedIPS)
     SetChassisVelocity(-speedIPS, 0.0f, 0.0f);
 }
 
+void RobotMotion_TestWheelSpeeds(float frontLeftIPS, float frontRightIPS,
+        float rearLeftIPS, float rearRightIPS)
+{
+    SetDriveWheels(frontLeftIPS, frontRightIPS, rearLeftIPS, rearRightIPS);
+}
+
 void RobotMotion_TurnLeftAbout(TurnPivot_t pivot, float speedIPS)
 {
     float xOffset;
@@ -204,10 +210,14 @@ static uint8_t EnsurePWMReady(void)
 static void SetChassisVelocity(float vxIPS, float vyIPS, float omegaRadPerSec)
 {
     float radiusSum = ROBOT_HALF_WIDTH_IN + ROBOT_HALF_LENGTH_IN;
-    float frontLeft = vyIPS + vxIPS - (omegaRadPerSec * radiusSum);
-    float frontRight = vyIPS - vxIPS + (omegaRadPerSec * radiusSum);
-    float rearLeft = vyIPS - vxIPS - (omegaRadPerSec * radiusSum);
-    float rearRight = vyIPS + vxIPS + (omegaRadPerSec * radiusSum);
+
+    /* Mecanum X-drive mix, with +vx = strafe right and +vy = forward.
+     * Pure strafe right should be FL/RR reverse and FR/RL forward.
+     * Pure strafe left should be FL/RR forward and FR/RL reverse. */
+    float frontLeft = vyIPS - vxIPS - (omegaRadPerSec * radiusSum);
+    float frontRight = vyIPS + vxIPS + (omegaRadPerSec * radiusSum);
+    float rearLeft = vyIPS + vxIPS - (omegaRadPerSec * radiusSum);
+    float rearRight = vyIPS - vxIPS + (omegaRadPerSec * radiusSum);
 
     SetDriveWheels(frontLeft, frontRight, rearLeft, rearRight);
 }
