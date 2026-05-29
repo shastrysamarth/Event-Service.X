@@ -8,6 +8,8 @@
 uint8_t InitShootingSubHSM(void);
 ES_Event RunShootingSubHSM(ES_Event ThisEvent);
 uint8_t ShootingSubHSM_IsBeaconSearchActive(void);
+uint8_t ShootingSubHSM_IsAligning(void);
+uint8_t ShootingSubHSM_AllowsAlign(void);
 const char *ShootingSubHSM_GetStateName(void);
 uint16_t ShootingSubHSM_GetMaxBeaconADC(void);
 

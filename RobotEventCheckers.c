@@ -263,7 +263,8 @@ uint8_t CheckAlignEvents(void)
     return FALSE;
 #endif
 
-    if (NavigateToISZ_IsAligning() == FALSE) {
+    if ((NavigateToISZ_IsAligning() == FALSE) &&
+            (ShootingSubHSM_IsAligning() == FALSE)) {
         return FALSE;
     }
 
@@ -291,7 +292,8 @@ uint8_t CheckMisalignment(void)
     return FALSE;
 #endif
 
-    if (NavigateToISZ_AllowsAlign() == FALSE) {
+    if ((NavigateToISZ_AllowsAlign() == FALSE) &&
+            (ShootingSubHSM_AllowsAlign() == FALSE)) {
         last.misaligned = FALSE;
         return FALSE;
     }

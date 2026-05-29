@@ -30,6 +30,8 @@
 /* DEPRECATED with heading-only align: was used for IMU position error vs ref. */
 #define POSITION_THRESHOLD_IN 0.75f
 #define HEADING_THRESHOLD_DEG 3.0f
+#define TAPE_ALIGN_HEADING_STRAIGHT_DEG 1.5f
+#define TAPE_ALIGN_SWEEP_TIMER_MS 500u
 /* Small deadband on accel used for integration (LSB ≈ 0.01 m/s²). */
 #define IMU_ACCEL_INTEGRATE_DEADBAND_RAW 8
 /* "Still" uses raw linear accel before integrate deadband (same LSB scale). */
@@ -45,6 +47,15 @@
 #define ALIGN_REALIGNED_SOURCE_SENSOR (1u)
 #define DISTANCE_FORWARD_TO_ISZ_IN 10.0f
 #define DISTANCE_REVERSE_TO_SHOOT_IN 3.0f
+
+/* Tape event params use bit = 1 when that tape sensor is on tape. */
+#define TAPE_SENSOR_1_MASK (1u << 0)
+#define TAPE_SENSOR_2_MASK (1u << 1)
+#define TAPE_SENSOR_3_MASK (1u << 2)
+#define TAPE_SENSOR_4_MASK (1u << 3)
+#define TAPE_SENSOR_5_MASK (1u << 4)
+#define TAPE_SENSOR_ALL_MASK (TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK | \
+    TAPE_SENSOR_3_MASK | TAPE_SENSOR_4_MASK | TAPE_SENSOR_5_MASK)
 
 #define BNO055_AXIS_X 0u
 #define BNO055_AXIS_Y 1u
@@ -206,7 +217,7 @@
 #define LAUNCHER_SERVO_MIN_PULSE_US 1000u
 #define LAUNCHER_SERVO_MAX_PULSE_US 2000u
 #define LAUNCHER_SERVO_CENTER_PULSE_US 1500u
-#define SHOOTER_MOTOR_DUTY 900u
+#define SHOOTER_MOTOR_DUTY MAX_PWM
 
 #define BNO055_I2C_ADDRESS 0x28u
 #define BNO055_I2C_BAUD_HZ 100000u

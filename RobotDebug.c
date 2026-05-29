@@ -19,6 +19,7 @@
 static const char *BoundaryName(BoundaryChoice_t choice);
 static const char *MovementAxisName(MovementAxis_t axis);
 static const char *DistanceAxisName(DistanceAxis_t axis);
+static const char *AlignModeName(AlignMode_t mode);
 static void PrintFixedValue(const char *name, float value, const char *unit);
 
 void RobotDebug_LogStateEntry(const char *machineName,
@@ -51,6 +52,9 @@ void RobotDebug_PrintCurrentState(void)
         }
     } else if (strcmp(topState, "ShootState") == 0) {
         printf(" > %s", ShootingSubHSM_GetStateName());
+        if (ShootingSubHSM_IsAligning() == TRUE) {
+            printf(" > %s", AlignSubHSM_GetStateName());
+        }
     }
 
     printf("\r\n");
@@ -73,8 +77,9 @@ void RobotDebug_PrintModuleVariables(void)
             BoundaryName(NavigateToISZ_GetBoundaryChoice()),
             MovementAxisName(NavigateToISZ_GetMovementAxis()),
             (unsigned int) NavigateToISZ_GetNumTapesCrossed());
-    printf("[VAR] Align.state=%s axis=%s\r\n",
+    printf("[VAR] Align.state=%s mode=%s axis=%s\r\n",
             AlignSubHSM_GetStateName(),
+            AlignModeName(AlignSubHSM_GetMode()),
             MovementAxisName(AlignSubHSM_GetAxis()));
     PrintFixedValue("[VAR] Align.headingError", RobotIMU_GetHeadingErrorToZeroDeg(), "deg");
     printf("[VAR] Shooting.state=%s maxBeaconADC=%u targetStep=%d currentStep=%d\r\n",
@@ -128,6 +133,11 @@ static const char *MovementAxisName(MovementAxis_t axis)
 static const char *DistanceAxisName(DistanceAxis_t axis)
 {
     return (axis == DISTANCE_AXIS_X) ? "X" : "Y";
+}
+
+static const char *AlignModeName(AlignMode_t mode)
+{
+    return (mode == ALIGN_MODE_TAPE) ? "TAPE" : "GYRO";
 }
 
 static void PrintFixedValue(const char *name, float value, const char *unit)

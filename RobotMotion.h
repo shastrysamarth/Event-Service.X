@@ -17,9 +17,13 @@ void RobotMotion_TestWheelSpeeds(float frontLeftIPS, float frontRightIPS,
         float rearLeftIPS, float rearRightIPS);
 
 void RobotMotion_StartDistanceMove(DistanceAxis_t axis, int8_t direction, float targetInches);
+void RobotMotion_StartDistanceMoveAtSpeed(DistanceAxis_t axis, int8_t direction,
+        float targetInches, float speedIPS);
 void RobotMotion_StopDistanceMove(void);
+void RobotMotion_PauseDistanceMove(void);
+void RobotMotion_ResumeDistanceMove(void);
 uint8_t RobotMotion_IsDistanceMoveActive(void);
-/* Completes after open-loop time = targetInches / MOTOR_SPEED_IPS (ES_Timer_GetTime). */
+/* Completes after open-loop time = targetInches / speedIPS (ES_Timer_GetTime). */
 uint8_t RobotMotion_IsDistanceMoveComplete(void);
 DistanceAxis_t RobotMotion_GetDistanceAxis(void);
 int8_t RobotMotion_GetDistanceDirection(void);

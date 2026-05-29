@@ -1082,6 +1082,24 @@ static uint16_t GetDefaultParamForEvent(ES_EventTyp_t eventType)
     case TapeSensor5OffEvent:
     case TapeSensor5LowToHighEvent:
         return 5u;
+    case TapeSensor1And2OffEvent:
+        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
+                ~(TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK));
+    case TapeSensor1And5OffEvent:
+        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
+                ~(TAPE_SENSOR_1_MASK | TAPE_SENSOR_5_MASK));
+    case TapeSensor2And5OffEvent:
+        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
+                ~(TAPE_SENSOR_2_MASK | TAPE_SENSOR_5_MASK));
+    case TapeSensor3And4OffEvent:
+        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
+                ~(TAPE_SENSOR_3_MASK | TAPE_SENSOR_4_MASK));
+    case TapeSensor3And5OffEvent:
+        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
+                ~(TAPE_SENSOR_3_MASK | TAPE_SENSOR_5_MASK));
+    case TapeSensor4And5OffEvent:
+        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
+                ~(TAPE_SENSOR_4_MASK | TAPE_SENSOR_5_MASK));
     case Solenoid1OnEvent:
         return 1u;
     case Solenoid2OnEvent:

@@ -58,6 +58,8 @@ static void CountTape5Crossing(void);
 static uint8_t IsTop(void);
 static uint8_t IsBottom(void);
 static uint8_t IsAlignableState(NavigateState_t state);
+static AlignMode_t AlignModeForState(NavigateState_t state);
+static void BeginAlignForState(NavigateState_t state);
 static void AcceptCurrentAlignment(uint16_t sourceParam);
 static void PostReachedISZ(void);
 
@@ -112,8 +114,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case MisalignedEvent:
-            returnStateAfterAlign = CurrentState;
-            InitAlignSubHSM(movement_axis, x_ref, y_ref);
+            BeginAlignForState(CurrentState);
             nextState = AlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -137,8 +138,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case MisalignedEvent:
-            returnStateAfterAlign = CurrentState;
-            InitAlignSubHSM(movement_axis, x_ref, y_ref);
+            BeginAlignForState(CurrentState);
             nextState = AlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -173,7 +173,8 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             if (IsBottom()) {
                 RobotMotion_Stop();
                 RobotIMU_ZeroPositionVelocity();
-                RobotMotion_StartDistanceMove(DISTANCE_AXIS_Y, 1, DISTANCE_FORWARD_TO_ISZ_IN);
+                RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, 1,
+                        DISTANCE_FORWARD_TO_ISZ_IN, MOTOR_SPEED_IPS);
                 nextState = Forward2State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
@@ -183,15 +184,15 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             if (IsTop()) {
                 RobotMotion_Stop();
                 RobotIMU_ZeroPositionVelocity();
-                RobotMotion_StartDistanceMove(DISTANCE_AXIS_Y, 1, DISTANCE_FORWARD_TO_ISZ_IN);
+                RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, 1,
+                        DISTANCE_FORWARD_TO_ISZ_IN, MOTOR_SPEED_IPS);
                 nextState = Forward3State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
         case MisalignedEvent:
-            returnStateAfterAlign = CurrentState;
-            InitAlignSubHSM(movement_axis, x_ref, y_ref);
+            BeginAlignForState(CurrentState);
             nextState = AlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -231,8 +232,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case MisalignedEvent:
-            returnStateAfterAlign = CurrentState;
-            InitAlignSubHSM(movement_axis, x_ref, y_ref);
+            BeginAlignForState(CurrentState);
             nextState = AlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -272,8 +272,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case MisalignedEvent:
-            returnStateAfterAlign = CurrentState;
-            InitAlignSubHSM(movement_axis, x_ref, y_ref);
+            BeginAlignForState(CurrentState);
             nextState = AlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -297,8 +296,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case MisalignedEvent:
-            returnStateAfterAlign = CurrentState;
-            InitAlignSubHSM(movement_axis, x_ref, y_ref);
+            BeginAlignForState(CurrentState);
             nextState = AlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -322,8 +320,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case MisalignedEvent:
-            returnStateAfterAlign = CurrentState;
-            InitAlignSubHSM(movement_axis, x_ref, y_ref);
+            BeginAlignForState(CurrentState);
             nextState = AlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -345,6 +342,12 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
+        case MisalignedEvent:
+            BeginAlignForState(CurrentState);
+            nextState = AlignState;
+            makeTransition = TRUE;
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
         default:
             break;
         }
@@ -362,6 +365,12 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
+        case MisalignedEvent:
+            BeginAlignForState(CurrentState);
+            nextState = AlignState;
+            makeTransition = TRUE;
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
         default:
             break;
         }
@@ -375,14 +384,14 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         case TapeSensor1OnEvent:
             RobotMotion_Stop();
             RobotIMU_ZeroPositionVelocity();
-            RobotMotion_StartDistanceMove(DISTANCE_AXIS_Y, -1, DISTANCE_REVERSE_TO_SHOOT_IN);
+            RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, -1,
+                    DISTANCE_REVERSE_TO_SHOOT_IN, MOTOR_SPEED_IPS);
             nextState = Reverse3State;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case MisalignedEvent:
-            returnStateAfterAlign = CurrentState;
-            InitAlignSubHSM(movement_axis, x_ref, y_ref);
+            BeginAlignForState(CurrentState);
             nextState = AlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -400,14 +409,14 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         case TapeSensor1OnEvent:
             RobotMotion_Stop();
             RobotIMU_ZeroPositionVelocity();
-            RobotMotion_StartDistanceMove(DISTANCE_AXIS_Y, -1, DISTANCE_REVERSE_TO_SHOOT_IN);
+            RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, -1,
+                    DISTANCE_REVERSE_TO_SHOOT_IN, MOTOR_SPEED_IPS);
             nextState = Reverse3State;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case MisalignedEvent:
-            returnStateAfterAlign = CurrentState;
-            InitAlignSubHSM(movement_axis, x_ref, y_ref);
+            BeginAlignForState(CurrentState);
             nextState = AlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -425,6 +434,12 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         case DistanceMoveCompleteEvent:
             RobotMotion_Stop();
             PostReachedISZ();
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        case MisalignedEvent:
+            BeginAlignForState(CurrentState);
+            nextState = AlignState;
+            makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         default:
@@ -550,11 +565,41 @@ static uint8_t IsAlignableState(NavigateState_t state)
     case StrafeLeft1State:
     case Forward1State:
     case Reverse2State:
+    case Forward2State:
+    case Forward3State:
     case StrafeLeft2State:
     case StrafeRight2State:
+    case Reverse3State:
         return TRUE;
     default:
         return FALSE;
+    }
+}
+
+static AlignMode_t AlignModeForState(NavigateState_t state)
+{
+    switch (state) {
+    case InitialStrafeLeftState:
+    case InitialStrafeRightState:
+    case Reverse1State:
+    case Forward2State:
+    case Forward3State:
+        return ALIGN_MODE_TAPE;
+    default:
+        return ALIGN_MODE_GYRO;
+    }
+}
+
+static void BeginAlignForState(NavigateState_t state)
+{
+    AlignMode_t mode = AlignModeForState(state);
+
+    returnStateAfterAlign = state;
+    RobotMotion_PauseDistanceMove();
+    if (mode == ALIGN_MODE_TAPE) {
+        InitTapeAlignSubHSM(movement_axis, x_ref, y_ref);
+    } else {
+        InitGyroAlignSubHSM(movement_axis, x_ref, y_ref);
     }
 }
 
@@ -568,6 +613,7 @@ static void AcceptCurrentAlignment(uint16_t sourceParam)
     }
     /* Heading offset always refreshed after align (sensor or harness). */
     RobotIMU_ZeroHeading();
+    RobotMotion_ResumeDistanceMove();
 }
 
 static void PostReachedISZ(void)

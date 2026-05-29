@@ -176,7 +176,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case SlowMoveForwardState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_Forward(MOTOR_SPEED_IPS);
+            RobotMotion_Forward(MOTOR_SPEED_IPS - 1);
             break;
         case TapeSensor4OnEvent:
             boundary_choice = BOUNDARY_TOP;

@@ -17,6 +17,7 @@ typedef enum {
 } DriveMotor_t;
 
 static uint8_t distanceMoveActive = FALSE;
+static uint8_t distanceMovePaused = FALSE;
 static DistanceAxis_t distanceAxis = DISTANCE_AXIS_Y;
 static int8_t distanceDirection = 1;
 /* DEPRECATED for open-loop timing: was IMU odometry target; kept for debug getters. */
@@ -24,6 +25,7 @@ static float distanceTargetInches = 0.0f;
 /* Open-loop distance: elapsed ms vs (inches / MOTOR_SPEED_IPS) * 1000 */
 static uint32_t distanceStartMs = 0u;
 static uint32_t distanceDurationMs = 0u;
+static uint32_t distanceRemainingMs = 0u;
 
 static void ConfigureDirectionPins(void);
 static uint8_t EnsurePWMReady(void);
@@ -118,30 +120,78 @@ void RobotMotion_TurnRightAbout(TurnPivot_t pivot, float speedIPS)
 
 void RobotMotion_StartDistanceMove(DistanceAxis_t axis, int8_t direction, float targetInches)
 {
+    RobotMotion_StartDistanceMoveAtSpeed(axis, direction, targetInches, MOTOR_SPEED_IPS);
+}
+
+void RobotMotion_StartDistanceMoveAtSpeed(DistanceAxis_t axis, int8_t direction,
+        float targetInches, float speedIPS)
+{
     float durationFloat;
 
     distanceMoveActive = TRUE;
+    distanceMovePaused = FALSE;
     distanceAxis = axis;
     distanceDirection = (direction >= 0) ? 1 : -1;
     distanceTargetInches = targetInches;
 
-    /* Chassis translation time from nominal MOTOR_SPEED_IPS (same as Forward/Reverse in nav). */
-    durationFloat = (targetInches / MOTOR_SPEED_IPS) * 1000.0f;
+    if (speedIPS < 0.0f) {
+        speedIPS = -speedIPS;
+    }
+    if (speedIPS < 0.01f) {
+        speedIPS = MOTOR_SPEED_IPS;
+    }
+
+    durationFloat = (targetInches / speedIPS) * 1000.0f;
     if (durationFloat < 1.0f) {
         durationFloat = 1.0f;
     }
     distanceDurationMs = (uint32_t) (durationFloat + 0.5f);
+    distanceRemainingMs = distanceDurationMs;
     distanceStartMs = ES_Timer_GetTime();
 }
 
 void RobotMotion_StopDistanceMove(void)
 {
     distanceMoveActive = FALSE;
+    distanceMovePaused = FALSE;
+    distanceRemainingMs = 0u;
+}
+
+void RobotMotion_PauseDistanceMove(void)
+{
+    uint32_t now;
+    uint32_t elapsed;
+
+    if ((distanceMoveActive == FALSE) || (distanceMovePaused == TRUE)) {
+        return;
+    }
+
+    now = ES_Timer_GetTime();
+    elapsed = now - distanceStartMs;
+    if (elapsed >= distanceDurationMs) {
+        distanceRemainingMs = 1u;
+    } else {
+        distanceRemainingMs = distanceDurationMs - elapsed;
+    }
+    distanceMoveActive = FALSE;
+    distanceMovePaused = TRUE;
+}
+
+void RobotMotion_ResumeDistanceMove(void)
+{
+    if (distanceMovePaused == FALSE) {
+        return;
+    }
+
+    distanceDurationMs = (distanceRemainingMs == 0u) ? 1u : distanceRemainingMs;
+    distanceStartMs = ES_Timer_GetTime();
+    distanceMoveActive = TRUE;
+    distanceMovePaused = FALSE;
 }
 
 uint8_t RobotMotion_IsDistanceMoveActive(void)
 {
-    return distanceMoveActive;
+    return (distanceMoveActive || distanceMovePaused) ? TRUE : FALSE;
 }
 
 uint8_t RobotMotion_IsDistanceMoveComplete(void)
@@ -149,7 +199,7 @@ uint8_t RobotMotion_IsDistanceMoveComplete(void)
     uint32_t now;
     uint32_t elapsed;
 
-    if (distanceMoveActive == FALSE) {
+    if ((distanceMoveActive == FALSE) || (distanceMovePaused == TRUE)) {
         return FALSE;
     }
 

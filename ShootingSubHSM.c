@@ -1,5 +1,6 @@
 #include "ShootingSubHSM.h"
 
+#include "AlignSubHSM.h"
 #include "ES_Framework.h"
 #include "ES_Timers.h"
 #include "RobotDebug.h"
@@ -7,9 +8,11 @@
 #include "RobotLauncher.h"
 #include "RobotMotion.h"
 #include "RobotPins.h"
+#include "RobotStepper.h"
 
 typedef enum {
     InitPShootState,
+    AlignBeforeSearchState,
     SearchBeaconMaxState,
     SetLauncherAngleState,
     RunShooterState,
@@ -18,6 +21,7 @@ typedef enum {
 
 static const char *StateNames[] = {
     "InitPShootState",
+    "AlignBeforeSearchState",
     "SearchBeaconMaxState",
     "SetLauncherAngleState",
     "RunShooterState",
@@ -26,7 +30,9 @@ static const char *StateNames[] = {
 
 static ShootingState_t CurrentState = InitPShootState;
 static uint16_t maxBeaconADC = 0u;
+static uint8_t strafeRight = TRUE;
 
+static void DriveBeaconSearchStrafe(void);
 static void PostDone(void);
 
 uint8_t InitShootingSubHSM(void)
@@ -35,6 +41,8 @@ uint8_t InitShootingSubHSM(void)
 
     CurrentState = InitPShootState;
     maxBeaconADC = 0u;
+    strafeRight = TRUE;
+    RobotStepper_Disable();
 
     returnEvent = RunShootingSubHSM(INIT_EVENT);
     return (returnEvent.EventType == ES_NO_EVENT) ? TRUE : FALSE;
@@ -51,6 +59,19 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     switch (CurrentState) {
     case InitPShootState:
         if (ThisEvent.EventType == ES_INIT) {
+            RobotStepper_Disable();
+            InitGyroAlignSubHSM(MOVEMENT_AXIS_HORIZONTAL, 0.0f, 0.0f);
+            nextState = AlignBeforeSearchState;
+            makeTransition = TRUE;
+            ThisEvent.EventType = ES_NO_EVENT;
+        }
+        break;
+
+    case AlignBeforeSearchState:
+        ThisEvent = RunAlignSubHSM(ThisEvent);
+        if (ThisEvent.EventType == RealignedEvent) {
+            RobotMotion_Stop();
+            strafeRight = TRUE;
             nextState = SearchBeaconMaxState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -60,7 +81,25 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     case SearchBeaconMaxState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+            RobotStepper_Disable();
+            DriveBeaconSearchStrafe();
+            break;
+        case TapeSensor3OnEvent:
+            strafeRight = TRUE;
+            DriveBeaconSearchStrafe();
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        case TapeSensor4OnEvent:
+            strafeRight = FALSE;
+            DriveBeaconSearchStrafe();
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        case MisalignedEvent:
+            RobotMotion_Stop();
+            InitGyroAlignSubHSM(MOVEMENT_AXIS_HORIZONTAL, 0.0f, 0.0f);
+            nextState = AlignBeforeSearchState;
+            makeTransition = TRUE;
+            ThisEvent.EventType = ES_NO_EVENT;
             break;
         case MaxSignalFoundEvent:
             maxBeaconADC = ThisEvent.EventParam;
@@ -137,6 +176,16 @@ uint8_t ShootingSubHSM_IsBeaconSearchActive(void)
     return (CurrentState == SearchBeaconMaxState) ? TRUE : FALSE;
 }
 
+uint8_t ShootingSubHSM_IsAligning(void)
+{
+    return (CurrentState == AlignBeforeSearchState) ? TRUE : FALSE;
+}
+
+uint8_t ShootingSubHSM_AllowsAlign(void)
+{
+    return (CurrentState == SearchBeaconMaxState) ? TRUE : FALSE;
+}
+
 const char *ShootingSubHSM_GetStateName(void)
 {
     return StateNames[CurrentState];
@@ -145,6 +194,15 @@ const char *ShootingSubHSM_GetStateName(void)
 uint16_t ShootingSubHSM_GetMaxBeaconADC(void)
 {
     return maxBeaconADC;
+}
+
+static void DriveBeaconSearchStrafe(void)
+{
+    if (strafeRight == TRUE) {
+        RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+    } else {
+        RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
+    }
 }
 
 static void PostDone(void)
