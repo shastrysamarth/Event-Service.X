@@ -118,7 +118,6 @@ static char activeDriveCommandKey = '\0';
 void RobotTestHarness_RunMotorSensorBench(void)
 {
     unsigned int lastSensorPrintTime;
-    unsigned int lastBeaconSampleTime;
 
     TIMERS_Init();
     RobotStepper_Init();
@@ -127,7 +126,6 @@ void RobotTestHarness_RunMotorSensorBench(void)
     printf("[STEPPER] initialized at step 0; STEP/DIR driven LOW for bench idle\r\n");
     BenchPrintHelp();
     lastSensorPrintTime = TIMERS_GetTime();
-    lastBeaconSampleTime = lastSensorPrintTime;
 
     for (;;) {
         unsigned int now;
@@ -141,15 +139,6 @@ void RobotTestHarness_RunMotorSensorBench(void)
         }
 
         now = TIMERS_GetTime();
-
-        /* Push a new ADC sample into the moving average every 1ms, independent
-         * of the 250ms print rate. This matches the HSM event-checker cadence
-         * and lets the 10-sample window settle in ~10ms instead of ~2.5s. */
-        if ((activeSensorMask & BENCH_SENSOR_MASK(BENCH_SENSOR_BEACON)) &&
-                ((unsigned int) (now - lastBeaconSampleTime) >= 1u)) {
-            RobotSensors_ReadBeaconADC();
-            lastBeaconSampleTime = now;
-        }
 
         if ((activeSensorMask != 0u) &&
                 ((unsigned int) (now - lastSensorPrintTime) >= BENCH_SENSOR_PERIOD_MS)) {

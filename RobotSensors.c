@@ -1,9 +1,15 @@
 #include "RobotSensors.h"
 
+#include <xc.h>
+#include <sys/attribs.h>
+
 #include "AD.h"
+#include "BOARD.h"
 #include "IO_Ports.h"
 #include "RobotPins.h"
 #include "RobotPlugPlay.h"
+
+#define SENSOR_SAMPLER_HZ 1000u
 
 static uint8_t TapeDigitalPort(TapeSensor_t sensor);
 static uint16_t TapeDigitalPin(TapeSensor_t sensor);
@@ -11,11 +17,18 @@ static uint8_t TapeOnIsHigh(TapeSensor_t sensor);
 static uint8_t BumpDigitalPort(BumpSensor_t sensor);
 static uint16_t BumpDigitalPin(BumpSensor_t sensor);
 static uint16_t BeaconAveragePush(uint16_t reading);
+static void RobotSensors_SampleNow(void);
+static void RobotSensors_InitSampler(void);
 
-static uint16_t beaconSamples[BEACON_AVERAGE_SAMPLE_COUNT];
-static uint32_t beaconSampleSum = 0u;
-static uint8_t beaconSampleIndex = 0u;
-static uint8_t beaconSampleCount = 0u;
+static volatile uint8_t sampledTapeRaw[5];
+static volatile uint8_t sampledTapeOn[5];
+static volatile uint16_t beaconSamples[BEACON_AVERAGE_SAMPLE_COUNT];
+static volatile uint32_t beaconSampleSum = 0u;
+static volatile uint8_t beaconSampleIndex = 0u;
+static volatile uint8_t beaconSampleCount = 0u;
+static volatile uint16_t sampledBeaconRawADC = 0u;
+static volatile uint16_t sampledBeaconSmoothADC = 0u;
+static volatile uint32_t sensorSampleTicks = 0u;
 
 uint8_t RobotSensors_Init(void)
 {
@@ -40,15 +53,29 @@ uint8_t RobotSensors_Init(void)
 #endif
 
     if (pins == 0u) {
+        RobotSensors_InitSampler();
         return TRUE;
     }
-    return (AD_AddPins(pins) == SUCCESS) ? TRUE : FALSE;
+    if (AD_AddPins(pins) != SUCCESS) {
+        return FALSE;
+    }
+    RobotSensors_InitSampler();
+    return TRUE;
 }
 
 uint16_t RobotSensors_ReadBeaconRawADC(void)
 {
 #if ROBOT_PLUGPLAY_USE_BEACON_ADC
     return AD_ReadADPin(BEACON_ADC_PIN);
+#else
+    return 0u;
+#endif
+}
+
+uint16_t RobotSensors_GetBeaconRawADC(void)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    return sampledBeaconRawADC;
 #else
     return 0u;
 #endif
@@ -66,7 +93,9 @@ uint16_t RobotSensors_ReadBeaconADC(void)
 uint16_t RobotSensors_PushBeaconADC(uint16_t reading)
 {
 #if ROBOT_PLUGPLAY_USE_BEACON_ADC
-    return BeaconAveragePush(reading);
+    sampledBeaconRawADC = reading;
+    sampledBeaconSmoothADC = BeaconAveragePush(reading);
+    return sampledBeaconSmoothADC;
 #else
     (void)reading;
     return 0u;
@@ -76,11 +105,7 @@ uint16_t RobotSensors_PushBeaconADC(uint16_t reading)
 uint16_t RobotSensors_GetBeaconADC(void)
 {
 #if ROBOT_PLUGPLAY_USE_BEACON_ADC
-    if (beaconSampleCount == 0u) {
-        return 0u;
-    }
-    return (uint16_t) ((beaconSampleSum + (beaconSampleCount / 2u)) /
-            beaconSampleCount);
+    return sampledBeaconSmoothADC;
 #else
     return 0u;
 #endif
@@ -97,6 +122,22 @@ uint8_t RobotSensors_ReadTapeDigital(TapeSensor_t sensor)
     port = TapeDigitalPort(sensor);
     pin = TapeDigitalPin(sensor);
     return (IO_PortsReadPort(port) & pin) ? 1u : 0u;
+}
+
+uint8_t RobotSensors_GetTapeDigital(TapeSensor_t sensor)
+{
+#if ROBOT_PLUGPLAY_USE_ANY_TAPE
+    if (RobotPlugPlay_IsTapeEnabled((uint8_t) sensor) == FALSE) {
+        return 0u;
+    }
+    if ((sensor < TAPE_SENSOR_1) || (sensor > TAPE_SENSOR_5)) {
+        return 0u;
+    }
+    return sampledTapeRaw[(uint8_t) sensor - 1u];
+#else
+    (void)sensor;
+    return 0u;
+#endif
 }
 
 uint16_t RobotSensors_ReadSolenoidADC(SolenoidSensor_t sensor)
@@ -130,7 +171,7 @@ uint16_t RobotSensors_ReadShooterMotorADC(void)
 uint8_t RobotSensors_ReadBeaconDistanceFeet(void)
 {
 #if ROBOT_PLUGPLAY_USE_BEACON_ADC
-    return RobotSensors_BeaconDistanceFeetFromADC(RobotSensors_ReadBeaconADC());
+    return RobotSensors_BeaconDistanceFeetFromADC(RobotSensors_GetBeaconADC());
 #else
     return BEACON_DISTANCE_UNKNOWN_FT;
 #endif
@@ -157,13 +198,18 @@ uint8_t RobotSensors_BeaconDistanceFeetFromADC(uint16_t reading)
 
 uint8_t RobotSensors_IsTapeOn(TapeSensor_t sensor)
 {
-    uint8_t reading;
-
+#if ROBOT_PLUGPLAY_USE_ANY_TAPE
     if (RobotPlugPlay_IsTapeEnabled((uint8_t) sensor) == FALSE) {
         return FALSE;
     }
-    reading = RobotSensors_ReadTapeDigital(sensor);
-    return RobotSensors_TapeRawIsOn(sensor, reading);
+    if ((sensor < TAPE_SENSOR_1) || (sensor > TAPE_SENSOR_5)) {
+        return FALSE;
+    }
+    return sampledTapeOn[(uint8_t) sensor - 1u];
+#else
+    (void)sensor;
+    return FALSE;
+#endif
 }
 
 uint8_t RobotSensors_TapeRawIsOn(TapeSensor_t sensor, uint8_t rawReading)
@@ -298,4 +344,49 @@ static uint16_t BeaconAveragePush(uint16_t reading)
 
     return (uint16_t) ((beaconSampleSum + (beaconSampleCount / 2u)) /
             beaconSampleCount);
+}
+
+static void RobotSensors_InitSampler(void)
+{
+    RobotSensors_SampleNow();
+
+    T3CON = 0;
+    TMR3 = 0;
+    PR3 = BOARD_GetPBClock() / SENSOR_SAMPLER_HZ;
+    IFS0bits.T3IF = 0;
+    IPC3bits.T3IP = 5;
+    IPC3bits.T3IS = 0;
+    IEC0bits.T3IE = 1;
+    T3CONbits.ON = 1;
+}
+
+static void RobotSensors_SampleNow(void)
+{
+#if ROBOT_PLUGPLAY_USE_ANY_TAPE
+    uint8_t i;
+    uint8_t raw;
+
+    for (i = 0u; i < 5u; i++) {
+        if (RobotPlugPlay_IsTapeEnabled(i + 1u) == FALSE) {
+            sampledTapeRaw[i] = 0u;
+            sampledTapeOn[i] = FALSE;
+            continue;
+        }
+        raw = RobotSensors_ReadTapeDigital((TapeSensor_t)(i + 1u));
+        sampledTapeRaw[i] = raw;
+        sampledTapeOn[i] = RobotSensors_TapeRawIsOn((TapeSensor_t)(i + 1u), raw);
+    }
+#endif
+
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    (void)RobotSensors_PushBeaconADC(RobotSensors_ReadBeaconRawADC());
+#endif
+
+    sensorSampleTicks++;
+}
+
+void __ISR(_TIMER_3_VECTOR, IPL5SOFT) RobotSensorsTimer3IntHandler(void)
+{
+    IFS0bits.T3IF = 0;
+    RobotSensors_SampleNow();
 }

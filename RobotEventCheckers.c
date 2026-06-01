@@ -20,7 +20,6 @@
 #define max(a,b) (((a) > (b)) ? (a) : (b))
 
 #define TAPE_DEBUG_SAMPLE_PERIOD_MS 0u
-#define BEACON_SAMPLE_PERIOD_MS 1u
 #define BEACON_STREAM_PRINT_PERIOD_MS 250u
 
 typedef struct
@@ -34,17 +33,13 @@ typedef struct
 static SensorSnapshot_t last;
 static uint8_t initialized = FALSE;
 static uint16_t lastBeaconADC = 0u;
-static uint16_t lastBeaconRawADC = 0u;
-static uint16_t lastBeaconSmoothADC = 0u;
 static uint16_t peakBeaconADC = 0u;
 static uint16_t minBeaconADC = 1024u;
 static uint8_t beaconHadIncrease = FALSE;
 static uint32_t lastTapeSampleLogMs = 0u;
 static uint8_t beaconStreamActive = FALSE;
-static uint32_t lastBeaconSampleMs = 0u;
 static uint32_t lastBeaconStreamPrintMs = 0u;
 
-static void SampleBeaconADC(void);
 static void BeaconStreamTick(void);
 static uint8_t PostEvent(ES_EventTyp_t eventType, uint16_t eventParam);
 static uint8_t PostOnRising(uint8_t current, uint8_t *previous,
@@ -110,16 +105,11 @@ void InitRobotEventCheckers(void)
     last.misaligned = FALSE;
 
 #if ROBOT_PLUGPLAY_USE_BEACON_ADC
-    beaconRaw = RobotSensors_ReadBeaconRawADC();
-    lastBeaconRawADC = beaconRaw;
-    lastBeaconSmoothADC = RobotSensors_PushBeaconADC(beaconRaw);
-    lastBeaconADC = lastBeaconSmoothADC;
-    lastBeaconSampleMs = ES_Timer_GetTime();
-    LogBeaconInitial(lastBeaconRawADC, lastBeaconADC);
+    beaconRaw = RobotSensors_GetBeaconRawADC();
+    lastBeaconADC = RobotSensors_GetBeaconADC();
+    LogBeaconInitial(beaconRaw, lastBeaconADC);
 #else
     beaconRaw = 0u;
-    lastBeaconRawADC = 0u;
-    lastBeaconSmoothADC = 0u;
     lastBeaconADC = 0u;
 #endif
     peakBeaconADC = lastBeaconADC;
@@ -145,7 +135,6 @@ void RobotEventCheckers_ToggleBeaconStream(void)
     if (beaconStreamActive)
     {
         printf("[SENSOR] beacon stream ON\r\n");
-        SampleBeaconADC();
         lastBeaconStreamPrintMs = nowMs - BEACON_STREAM_PRINT_PERIOD_MS;
         BeaconStreamTick();
     }
@@ -153,35 +142,6 @@ void RobotEventCheckers_ToggleBeaconStream(void)
     {
         printf("[SENSOR] beacon stream OFF\r\n");
     }
-}
-
-uint8_t CheckBeaconSample(void)
-{
-#if ROBOT_PLUGPLAY_USE_BEACON_ADC
-    uint32_t nowMs;
-
-    if (initialized == FALSE)
-    {
-        InitRobotEventCheckers();
-    }
-
-    nowMs = ES_Timer_GetTime();
-    if ((uint32_t)(nowMs - lastBeaconSampleMs) >= BEACON_SAMPLE_PERIOD_MS)
-    {
-        SampleBeaconADC();
-    }
-#endif
-
-    return FALSE;
-}
-
-static void SampleBeaconADC(void)
-{
-#if ROBOT_PLUGPLAY_USE_BEACON_ADC
-    lastBeaconRawADC = RobotSensors_ReadBeaconRawADC();
-    lastBeaconSmoothADC = RobotSensors_PushBeaconADC(lastBeaconRawADC);
-    lastBeaconSampleMs = ES_Timer_GetTime();
-#endif
 }
 
 static void BeaconStreamTick(void)
@@ -204,8 +164,8 @@ static void BeaconStreamTick(void)
     }
     lastBeaconStreamPrintMs = nowMs;
 
-    rawADC = lastBeaconRawADC;
-    smoothADC = lastBeaconSmoothADC;
+    rawADC = RobotSensors_GetBeaconRawADC();
+    smoothADC = RobotSensors_GetBeaconADC();
 
     printf("[SENSOR] beacon rawADC=%u smoothADC=%u distance=%u ft pin=%s\r\n",
            (unsigned int)rawADC,
@@ -250,7 +210,7 @@ uint8_t CheckBeaconEvents(void)
         InitRobotEventCheckers();
     }
 
-    current = lastBeaconSmoothADC;
+    current = RobotSensors_GetBeaconADC();
 
     if (IsBeaconSearchActive() == FALSE)
     {
@@ -331,7 +291,7 @@ uint8_t CheckTapeEvents(void)
 
     for (i = 0; i < 5u; i++)
     {
-        raw = RobotSensors_ReadTapeDigital((TapeSensor_t)(i + 1u));
+        raw = RobotSensors_GetTapeDigital((TapeSensor_t)(i + 1u));
         current = RobotSensors_TapeRawIsOn((TapeSensor_t)(i + 1u), raw);
         rawReadings[i] = raw;
         tapeReadings[i] = current;

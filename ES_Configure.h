@@ -79,9 +79,9 @@ typedef enum {
 extern const char * const EventNames[];
 
 #define EVENT_CHECK_HEADER "RobotEventCheckers.h"
-#define EVENT_CHECK_LIST CheckBeaconSample, CheckTapeEvents, CheckBumpEvents, \
-    CheckDistanceMove, CheckRobotPeriodic, CheckBeaconEvents, CheckSolenoidEvents, \
-    CheckAlignEvents, CheckMisalignment
+#define EVENT_CHECK_LIST CheckBeaconEvents, CheckTapeEvents, CheckBumpEvents, \
+    CheckDistanceMove, CheckSolenoidEvents, CheckAlignEvents, \
+    CheckMisalignment, CheckRobotPeriodic
 
 #define TIMER_UNUSED ((pPostFunc)0)
 #define TIMER0_RESP_FUNC PostRobotHSM
