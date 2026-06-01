@@ -61,6 +61,27 @@ static void PrintFixedInline(float value, const char *unit);
 static const char *PivotName(TurnPivot_t pivot);
 static void PivotOffset_LeftTurn(TurnPivot_t pivot, float *xOffsetIn, float *yOffsetIn);
 static void PivotOffset_RightTurn(TurnPivot_t pivot, float *xOffsetIn, float *yOffsetIn);
+static void LogMotionChange(void);
+
+/* Emits a "[MOTOR] control change" line whenever the drive command or pivot
+ * actually changes. Called from every command setter so the log is captured
+ * synchronously at the moment the command is issued, regardless of which
+ * service/state issued it (the keyboard checker that used to host this lives
+ * last in EVENT_CHECK_LIST and gets starved while sensors keep posting). */
+static void LogMotionChange(void)
+{
+    if ((lastMotionCommand == prevLoggedCommand) &&
+            (lastMotionPivot == prevLoggedPivot)) {
+        return;
+    }
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[MOTOR] control change: %s/%s -> %s/%s\r\n",
+            prevLoggedCommand, prevLoggedPivot,
+            lastMotionCommand, lastMotionPivot);
+#endif
+    prevLoggedCommand = lastMotionCommand;
+    prevLoggedPivot = lastMotionPivot;
+}
 
 uint8_t RobotMotion_Init(void)
 {
@@ -84,6 +105,7 @@ void RobotMotion_Stop(void)
 {
     lastMotionCommand = "stop";
     lastMotionPivot = "none";
+    LogMotionChange();
     SetDriveWheels(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
@@ -91,6 +113,7 @@ void RobotMotion_Forward(float speedIPS)
 {
     lastMotionCommand = "forward";
     lastMotionPivot = "none";
+    LogMotionChange();
     SetChassisVelocity(0.0f, speedIPS, 0.0f,
             1.08f, 1.00f, 1.08f, 1.00f);
 }
@@ -99,6 +122,7 @@ void RobotMotion_Reverse(float speedIPS)
 {
     lastMotionCommand = "reverse";
     lastMotionPivot = "none";
+    LogMotionChange();
     SetChassisVelocity(0.0f, -speedIPS, 0.0f,
             1.08f, 1.00f, 1.08f, 1.00f);
 }
@@ -107,6 +131,7 @@ void RobotMotion_StrafeRight(float speedIPS)
 {
     lastMotionCommand = "strafe-right";
     lastMotionPivot = "none";
+    LogMotionChange();
     SetChassisVelocity(-speedIPS, 0.0f, 0.0f,
             1.00f, 1.00f, 1.00f, 1.07f);
 }
@@ -115,6 +140,7 @@ void RobotMotion_StrafeLeft(float speedIPS)
 {
     lastMotionCommand = "strafe-left";
     lastMotionPivot = "none";
+    LogMotionChange();
     SetChassisVelocity(speedIPS, 0.0f, 0.0f,
             1.15f, 1.00f, 1.00f, 1.00f);
 }
@@ -124,6 +150,7 @@ void RobotMotion_TestWheelSpeeds(float frontLeftIPS, float frontRightIPS,
 {
     lastMotionCommand = "manual-wheel-test";
     lastMotionPivot = "none";
+    LogMotionChange();
     SetDriveWheels(frontLeftIPS, frontRightIPS, rearLeftIPS, rearRightIPS);
 }
 
@@ -137,6 +164,7 @@ void RobotMotion_TurnLeftAbout(TurnPivot_t pivot, float speedIPS)
     omega = speedIPS / (ROBOT_HALF_WIDTH_IN + ROBOT_HALF_LENGTH_IN);
     lastMotionCommand = "turn-left";
     lastMotionPivot = PivotName(pivot);
+    LogMotionChange();
     SetChassisVelocity(omega * yOffset, -omega * xOffset, omega,
             1.00f, 1.00f, 1.00f, 1.00f);
 }
@@ -151,6 +179,7 @@ void RobotMotion_TurnRightAbout(TurnPivot_t pivot, float speedIPS)
     omega = -speedIPS / (ROBOT_HALF_WIDTH_IN + ROBOT_HALF_LENGTH_IN);
     lastMotionCommand = "turn-right";
     lastMotionPivot = PivotName(pivot);
+    LogMotionChange();
     SetChassisVelocity(omega * yOffset, -omega * xOffset, omega,
             1.00f, 1.00f, 1.00f, 1.00f);
 }

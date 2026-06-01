@@ -23,28 +23,6 @@
 static uint8_t CommandUsesStrafeSpeed(const char *commandName);
 static float MotorCommandSpeedIPS(const char *commandName, float normalSpeedIPS);
 static unsigned int MotorDutyForSpeed(float speedIPS);
-static void LogMotorControlChange(void);
-
-/* Tracks the last drive control we logged so we only print on a real change.
- * RobotMotion stores command/pivot as stable string literals, so comparing
- * pointers is enough to detect a transition. */
-static const char *prevMotorControl = "Init";
-static const char *prevMotorPivot = "none";
-
-static void LogMotorControlChange(void)
-{
-    const char *control = RobotMotion_GetCommandName();
-    const char *pivot = RobotMotion_GetPivotName();
-
-    if ((control == prevMotorControl) && (pivot == prevMotorPivot)) {
-        return;
-    }
-
-    printf("[MOTOR] control change: %s/%s -> %s/%s\r\n",
-            prevMotorControl, prevMotorPivot, control, pivot);
-    prevMotorControl = control;
-    prevMotorPivot = pivot;
-}
 
 static uint8_t CommandUsesStrafeSpeed(const char *commandName)
 {
@@ -162,8 +140,6 @@ void RobotTestHarness_RunMotorSensorBench(void)
                 lastSensorPrintTime = TIMERS_GetTime();
             }
         }
-
-        LogMotorControlChange();
 
         now = TIMERS_GetTime();
 
@@ -879,8 +855,6 @@ uint8_t RobotTestHarness_CheckKeyboard(void)
 {
     char key;
     ES_EventTyp_t eventType;
-
-    LogMotorControlChange();
 
     if (IsReceiveEmpty()) {
         return FALSE;
