@@ -10,6 +10,7 @@ uint8_t InitFindFrontTapeSubHSM(void);
 ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent);
 BoundaryChoice_t FindFrontTape_GetBoundaryChoice(void);
 uint8_t FindFrontTape_IsBeaconSearchActive(void);
+void FindFrontTape_FastTapeReaction(ES_EventTyp_t eventType, uint8_t tapeMask);
 const char *FindFrontTape_GetStateName(void);
 
 #endif /* FIND_FRONT_TAPE_SUB_HSM_H */

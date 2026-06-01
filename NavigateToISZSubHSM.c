@@ -7,6 +7,8 @@
 #include "RobotIMU.h"
 #include "RobotMotion.h"
 #include "RobotPins.h"
+#include "RobotPlugPlay.h"
+#include "RobotSensors.h"
 
 typedef enum {
     InitPSubState,
@@ -59,6 +61,10 @@ static uint8_t IsTop(void);
 static uint8_t IsBottom(void);
 static uint8_t IsAlignableState(NavigateState_t state);
 static AlignMode_t AlignModeForState(NavigateState_t state);
+static uint8_t IsTapeOffEventType(ES_EventTyp_t eventType);
+static uint8_t TapeAlignNeededNow(void);
+static uint8_t HandleAlignTriggerEvent(ES_Event *event,
+        NavigateState_t *nextState, uint8_t *makeTransition);
 static void BeginAlignForState(NavigateState_t state);
 static void AcceptCurrentAlignment(uint16_t sourceParam);
 static void PostReachedISZ(void);
@@ -87,6 +93,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     ES_Tattle();
     ROBOT_DEBUG_STATE("NavigateToISZ", StateNames[CurrentState], ThisEvent);
 
+    if (HandleAlignTriggerEvent(&ThisEvent, &nextState, &makeTransition) == FALSE) {
     switch (CurrentState) {
     case InitPSubState:
         if (ThisEvent.EventType == ES_INIT) {
@@ -460,11 +467,13 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     default:
         break;
     }
+    }
 
     if (makeTransition == TRUE) {
         RunNavigateToISZSubHSM(EXIT_EVENT);
         CurrentState = nextState;
         RunNavigateToISZSubHSM(ENTRY_EVENT);
+        RobotMotion_DebugPrintCurrentCommand("entry");
     }
 
     ES_Tail();
@@ -483,7 +492,10 @@ uint8_t NavigateToISZ_IsAligning(void)
 
 uint8_t NavigateToISZ_AllowsAlign(void)
 {
-    return IsAlignableState(CurrentState);
+    if (IsAlignableState(CurrentState) == FALSE) {
+        return FALSE;
+    }
+    return (AlignModeForState(CurrentState) == ALIGN_MODE_GYRO) ? TRUE : FALSE;
 }
 
 uint8_t NavigateToISZ_IsCountingTape5(void)
@@ -588,6 +600,97 @@ static AlignMode_t AlignModeForState(NavigateState_t state)
     default:
         return ALIGN_MODE_GYRO;
     }
+}
+
+static uint8_t IsTapeOffEventType(ES_EventTyp_t eventType)
+{
+    switch (eventType) {
+    case TapeSensor1OffEvent:
+    case TapeSensor2OffEvent:
+    case TapeSensor3OffEvent:
+    case TapeSensor4OffEvent:
+    case TapeSensor5OffEvent:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+static uint8_t HandleAlignTriggerEvent(ES_Event *event,
+        NavigateState_t *nextState, uint8_t *makeTransition)
+{
+    AlignMode_t mode;
+
+    if (IsAlignableState(CurrentState) == FALSE) {
+        return FALSE;
+    }
+
+    mode = AlignModeForState(CurrentState);
+    if ((mode == ALIGN_MODE_GYRO) &&
+            (event->EventType == MisalignedEvent)) {
+        BeginAlignForState(CurrentState);
+        *nextState = AlignState;
+        *makeTransition = TRUE;
+        event->EventType = ES_NO_EVENT;
+        return TRUE;
+    }
+
+    if (mode == ALIGN_MODE_TAPE) {
+        if ((event->EventType == ES_ENTRY) && (TapeAlignNeededNow() == TRUE)) {
+            BeginAlignForState(CurrentState);
+            *nextState = AlignState;
+            *makeTransition = TRUE;
+            event->EventType = ES_NO_EVENT;
+            return TRUE;
+        }
+        if (IsTapeOffEventType(event->EventType) == TRUE) {
+            BeginAlignForState(CurrentState);
+            *nextState = AlignState;
+            *makeTransition = TRUE;
+            event->EventType = ES_NO_EVENT;
+            return TRUE;
+        }
+        if (event->EventType == MisalignedEvent) {
+            event->EventType = ES_NO_EVENT;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static uint8_t TapeAlignNeededNow(void)
+{
+    uint8_t offCount = 0u;
+    uint8_t sensorA;
+    uint8_t sensorB;
+    uint8_t sensorC = 5u;
+
+    if (movement_axis == MOVEMENT_AXIS_VERTICAL) {
+        sensorA = 1u;
+        sensorB = 2u;
+    } else {
+        sensorA = 3u;
+        sensorB = 4u;
+    }
+
+    if ((RobotPlugPlay_IsTapeEnabled(sensorA) == FALSE) ||
+            (RobotPlugPlay_IsTapeEnabled(sensorB) == FALSE) ||
+            (RobotPlugPlay_IsTapeEnabled(sensorC) == FALSE)) {
+        return FALSE;
+    }
+
+    if (RobotSensors_IsTapeOn((TapeSensor_t) sensorA) == FALSE) {
+        offCount++;
+    }
+    if (RobotSensors_IsTapeOn((TapeSensor_t) sensorB) == FALSE) {
+        offCount++;
+    }
+    if (RobotSensors_IsTapeOn((TapeSensor_t) sensorC) == FALSE) {
+        offCount++;
+    }
+
+    return (offCount >= 2u) ? TRUE : FALSE;
 }
 
 static void BeginAlignForState(NavigateState_t state)

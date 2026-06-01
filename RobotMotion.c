@@ -1,6 +1,8 @@
 #include "RobotMotion.h"
 
 #include <stdlib.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <xc.h>
 
 #include "ES_Timers.h"
@@ -26,16 +28,34 @@ static float distanceTargetInches = 0.0f;
 static uint32_t distanceStartMs = 0u;
 static uint32_t distanceDurationMs = 0u;
 static uint32_t distanceRemainingMs = 0u;
+static const char *lastMotionCommand = "Init";
+static const char *lastMotionPivot = "none";
+static float lastFrontLeftIPS = 0.0f;
+static float lastFrontRightIPS = 0.0f;
+static float lastRearLeftIPS = 0.0f;
+static float lastRearRightIPS = 0.0f;
+static int lastFrontLeftDuty = 0;
+static int lastFrontRightDuty = 0;
+static int lastRearLeftDuty = 0;
+static int lastRearRightDuty = 0;
 
 static void ConfigureDirectionPins(void);
 static uint8_t EnsurePWMReady(void);
-static void SetChassisVelocity(float vxIPS, float vyIPS, float omegaRadPerSec);
+/* The final four args tune this command only: FL, FR, RL, RR. Direct wheel
+ * tests bypass this so they still output the exact speed requested.
+ */
+static void SetChassisVelocity(float vxIPS, float vyIPS, float omegaRadPerSec,
+        float frontLeftScale, float frontRightScale,
+        float rearLeftScale, float rearRightScale);
 static void SetDriveWheels(float frontLeft, float frontRight, float rearLeft, float rearRight);
 static void SetMotor(DriveMotor_t motor, int speedDuty);
 static void SetMotorDirection(DriveMotor_t motor, int forward);
 static int SpeedToDuty(float wheelSpeedIPS);
 static float AbsFloat(float value);
-static void PivotOffset(TurnPivot_t pivot, float *xOffsetIn, float *yOffsetIn);
+static void PrintFixedInline(float value, const char *unit);
+static const char *PivotName(TurnPivot_t pivot);
+static void PivotOffset_LeftTurn(TurnPivot_t pivot, float *xOffsetIn, float *yOffsetIn);
+static void PivotOffset_RightTurn(TurnPivot_t pivot, float *xOffsetIn, float *yOffsetIn);
 
 uint8_t RobotMotion_Init(void)
 {
@@ -57,32 +77,48 @@ uint8_t RobotMotion_Init(void)
 
 void RobotMotion_Stop(void)
 {
+    lastMotionCommand = "stop";
+    lastMotionPivot = "none";
     SetDriveWheels(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 void RobotMotion_Forward(float speedIPS)
 {
-    SetChassisVelocity(0.0f, speedIPS, 0.0f);
+    lastMotionCommand = "forward";
+    lastMotionPivot = "none";
+    SetChassisVelocity(0.0f, speedIPS, 0.0f,
+            1.08f, 1.00f, 1.08f, 1.00f);
 }
 
 void RobotMotion_Reverse(float speedIPS)
 {
-    SetChassisVelocity(0.0f, -speedIPS, 0.0f);
+    lastMotionCommand = "reverse";
+    lastMotionPivot = "none";
+    SetChassisVelocity(0.0f, -speedIPS, 0.0f,
+            1.08f, 1.00f, 1.08f, 1.00f);
 }
 
 void RobotMotion_StrafeRight(float speedIPS)
 {
-    SetChassisVelocity(speedIPS, 0.0f, 0.0f);
+    lastMotionCommand = "strafe-right";
+    lastMotionPivot = "none";
+    SetChassisVelocity(-speedIPS, 0.0f, 0.0f,
+            1.00f, 1.00f, 1.00f, 1.07f);
 }
 
 void RobotMotion_StrafeLeft(float speedIPS)
 {
-    SetChassisVelocity(-speedIPS, 0.0f, 0.0f);
+    lastMotionCommand = "strafe-left";
+    lastMotionPivot = "none";
+    SetChassisVelocity(speedIPS, 0.0f, 0.0f,
+            1.15f, 1.00f, 1.00f, 1.00f);
 }
 
 void RobotMotion_TestWheelSpeeds(float frontLeftIPS, float frontRightIPS,
         float rearLeftIPS, float rearRightIPS)
 {
+    lastMotionCommand = "manual-wheel-test";
+    lastMotionPivot = "none";
     SetDriveWheels(frontLeftIPS, frontRightIPS, rearLeftIPS, rearRightIPS);
 }
 
@@ -92,14 +128,12 @@ void RobotMotion_TurnLeftAbout(TurnPivot_t pivot, float speedIPS)
     float yOffset;
     float omega;
 
-    if (pivot == TURN_PIVOT_CENTER) {
-        SetDriveWheels(-speedIPS, speedIPS, -speedIPS, speedIPS);
-        return;
-    }
-
-    PivotOffset(pivot, &xOffset, &yOffset);
+    PivotOffset_LeftTurn(pivot, &xOffset, &yOffset);
     omega = speedIPS / (ROBOT_HALF_WIDTH_IN + ROBOT_HALF_LENGTH_IN);
-    SetChassisVelocity(omega * yOffset, -omega * xOffset, omega);
+    lastMotionCommand = "turn-left";
+    lastMotionPivot = PivotName(pivot);
+    SetChassisVelocity(omega * yOffset, -omega * xOffset, omega,
+            1.00f, 1.00f, 1.00f, 1.00f);
 }
 
 void RobotMotion_TurnRightAbout(TurnPivot_t pivot, float speedIPS)
@@ -108,14 +142,12 @@ void RobotMotion_TurnRightAbout(TurnPivot_t pivot, float speedIPS)
     float yOffset;
     float omega;
 
-    if (pivot == TURN_PIVOT_CENTER) {
-        SetDriveWheels(speedIPS, -speedIPS, speedIPS, -speedIPS);
-        return;
-    }
-
-    PivotOffset(pivot, &xOffset, &yOffset);
+    PivotOffset_RightTurn(pivot, &xOffset, &yOffset);
     omega = -speedIPS / (ROBOT_HALF_WIDTH_IN + ROBOT_HALF_LENGTH_IN);
-    SetChassisVelocity(omega * yOffset, -omega * xOffset, omega);
+    lastMotionCommand = "turn-right";
+    lastMotionPivot = PivotName(pivot);
+    SetChassisVelocity(omega * yOffset, -omega * xOffset, omega,
+            1.00f, 1.00f, 1.00f, 1.00f);
 }
 
 void RobotMotion_StartDistanceMove(DistanceAxis_t axis, int8_t direction, float targetInches)
@@ -148,6 +180,15 @@ void RobotMotion_StartDistanceMoveAtSpeed(DistanceAxis_t axis, int8_t direction,
     distanceDurationMs = (uint32_t) (durationFloat + 0.5f);
     distanceRemainingMs = distanceDurationMs;
     distanceStartMs = ES_Timer_GetTime();
+
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[MOTOR] distance-move start axis=%s dir=%d target=",
+            (axis == DISTANCE_AXIS_X) ? "X" : "Y", (int) direction);
+    PrintFixedInline(targetInches, "in");
+    printf(" speed=");
+    PrintFixedInline(speedIPS, "ips");
+    printf(" dur=%lums\r\n", (unsigned long) distanceDurationMs);
+#endif
 }
 
 void RobotMotion_StopDistanceMove(void)
@@ -155,6 +196,9 @@ void RobotMotion_StopDistanceMove(void)
     distanceMoveActive = FALSE;
     distanceMovePaused = FALSE;
     distanceRemainingMs = 0u;
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[MOTOR] distance-move stop\r\n");
+#endif
 }
 
 void RobotMotion_PauseDistanceMove(void)
@@ -175,6 +219,10 @@ void RobotMotion_PauseDistanceMove(void)
     }
     distanceMoveActive = FALSE;
     distanceMovePaused = TRUE;
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[MOTOR] distance-move pause remainingMs=%lu\r\n",
+            (unsigned long) distanceRemainingMs);
+#endif
 }
 
 void RobotMotion_ResumeDistanceMove(void)
@@ -187,6 +235,10 @@ void RobotMotion_ResumeDistanceMove(void)
     distanceStartMs = ES_Timer_GetTime();
     distanceMoveActive = TRUE;
     distanceMovePaused = FALSE;
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[MOTOR] distance-move resume remainingMs=%lu\r\n",
+            (unsigned long) distanceDurationMs);
+#endif
 }
 
 uint8_t RobotMotion_IsDistanceMoveActive(void)
@@ -228,6 +280,29 @@ float RobotMotion_GetDistanceTargetInches(void)
     return distanceTargetInches;
 }
 
+void RobotMotion_DebugPrintCurrentCommand(const char *context)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[MOTOR] %s control=%s pivot=%s ", context,
+            lastMotionCommand,
+            lastMotionPivot);
+    printf("FL=");
+    PrintFixedInline(lastFrontLeftIPS, "ips");
+    printf("/duty=%d ", lastFrontLeftDuty);
+    printf("FR=");
+    PrintFixedInline(lastFrontRightIPS, "ips");
+    printf("/duty=%d ", lastFrontRightDuty);
+    printf("RL=");
+    PrintFixedInline(lastRearLeftIPS, "ips");
+    printf("/duty=%d ", lastRearLeftDuty);
+    printf("RR=");
+    PrintFixedInline(lastRearRightIPS, "ips");
+    printf("/duty=%d\r\n", lastRearRightDuty);
+#else
+    (void) context;
+#endif
+}
+
 static void ConfigureDirectionPins(void)
 {
 #if ROBOT_PLUGPLAY_USE_DRIVE_MOTORS
@@ -257,7 +332,9 @@ static uint8_t EnsurePWMReady(void)
     return TRUE;
 }
 
-static void SetChassisVelocity(float vxIPS, float vyIPS, float omegaRadPerSec)
+static void SetChassisVelocity(float vxIPS, float vyIPS, float omegaRadPerSec,
+        float frontLeftScale, float frontRightScale,
+        float rearLeftScale, float rearRightScale)
 {
     float radiusSum = ROBOT_HALF_WIDTH_IN + ROBOT_HALF_LENGTH_IN;
 
@@ -269,15 +346,36 @@ static void SetChassisVelocity(float vxIPS, float vyIPS, float omegaRadPerSec)
     float rearLeft = vyIPS + vxIPS - (omegaRadPerSec * radiusSum);
     float rearRight = vyIPS - vxIPS + (omegaRadPerSec * radiusSum);
 
+    frontLeft *= frontLeftScale;
+    frontRight *= frontRightScale;
+    rearLeft *= rearLeftScale;
+    rearRight *= rearRightScale;
+
     SetDriveWheels(frontLeft, frontRight, rearLeft, rearRight);
 }
 
 static void SetDriveWheels(float frontLeft, float frontRight, float rearLeft, float rearRight)
 {
-    SetMotor(MOTOR_FRONT_LEFT, SpeedToDuty(frontLeft) * MOTOR_FL_POLARITY);
-    SetMotor(MOTOR_FRONT_RIGHT, SpeedToDuty(frontRight) * MOTOR_FR_POLARITY);
-    SetMotor(MOTOR_REAR_LEFT, SpeedToDuty(rearLeft) * MOTOR_RL_POLARITY);
-    SetMotor(MOTOR_REAR_RIGHT, SpeedToDuty(rearRight) * MOTOR_RR_POLARITY);
+    lastFrontLeftIPS = frontLeft;
+    lastFrontRightIPS = frontRight;
+    lastRearLeftIPS = rearLeft;
+    lastRearRightIPS = rearRight;
+    lastFrontLeftDuty = SpeedToDuty(frontLeft) * MOTOR_FL_POLARITY;
+    lastFrontRightDuty = SpeedToDuty(frontRight) * MOTOR_FR_POLARITY;
+    lastRearLeftDuty = SpeedToDuty(rearLeft) * MOTOR_RL_POLARITY;
+    lastRearRightDuty = SpeedToDuty(rearRight) * MOTOR_RR_POLARITY;
+
+    SetMotor(MOTOR_FRONT_LEFT, lastFrontLeftDuty);
+    SetMotor(MOTOR_FRONT_RIGHT, lastFrontRightDuty);
+    SetMotor(MOTOR_REAR_LEFT, lastRearLeftDuty);
+    SetMotor(MOTOR_REAR_RIGHT, lastRearRightDuty);
+
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[MOTOR] %s pivot=%s FL=%d FR=%d RL=%d RR=%d\r\n",
+            lastMotionCommand, lastMotionPivot,
+            lastFrontLeftDuty, lastFrontRightDuty,
+            lastRearLeftDuty, lastRearRightDuty);
+#endif
 }
 
 static void SetMotor(DriveMotor_t motor, int speedDuty)
@@ -365,25 +463,96 @@ static float AbsFloat(float value)
     return (value < 0.0f) ? -value : value;
 }
 
-static void PivotOffset(TurnPivot_t pivot, float *xOffsetIn, float *yOffsetIn)
+static void PrintFixedInline(float value, const char *unit)
+{
+    int32_t scaled = (int32_t) (value * 100.0f);
+    uint32_t magnitude;
+
+    if (scaled < 0) {
+        magnitude = (uint32_t) (-scaled);
+        printf("-%lu.%02lu%s",
+                (unsigned long) (magnitude / 100u),
+                (unsigned long) (magnitude % 100u),
+                unit);
+    } else {
+        magnitude = (uint32_t) scaled;
+        printf("%lu.%02lu%s",
+                (unsigned long) (magnitude / 100u),
+                (unsigned long) (magnitude % 100u),
+                unit);
+    }
+}
+
+static const char *PivotName(TurnPivot_t pivot)
+{
+    switch (pivot) {
+    case TURN_PIVOT_FRONT_CENTER:
+        return "front-center";
+    case TURN_PIVOT_BACK_CENTER:
+        return "back-center";
+    case TURN_PIVOT_LEFT_CENTER:
+        return "left-center";
+    case TURN_PIVOT_RIGHT_CENTER:
+        return "right-center";
+    case TURN_PIVOT_CENTER:
+        return "center";
+    default:
+        return "unknown";
+    }
+}
+
+static void PivotOffset_LeftTurn(TurnPivot_t pivot, float *xOffsetIn, float *yOffsetIn)
 {
     *xOffsetIn = 0.0f;
     *yOffsetIn = 0.0f;
 
     switch (pivot) {
     case TURN_PIVOT_FRONT_CENTER:
-        *yOffsetIn = ROBOT_HALF_LENGTH_IN;
+        *yOffsetIn = -4.2f;
         break;
     case TURN_PIVOT_BACK_CENTER:
-        *yOffsetIn = -ROBOT_HALF_LENGTH_IN;
+        *yOffsetIn = 4.25f;
+        *xOffsetIn = 0.05f;
         break;
     case TURN_PIVOT_LEFT_CENTER:
-        *xOffsetIn = -ROBOT_HALF_WIDTH_IN;
+        *xOffsetIn = -1.8f;
         break;
     case TURN_PIVOT_RIGHT_CENTER:
-        *xOffsetIn = ROBOT_HALF_WIDTH_IN;
+        *xOffsetIn = 1.87f;
         break;
     case TURN_PIVOT_CENTER:
+        *xOffsetIn = -0.10f;
+        *yOffsetIn = -0.25f;
+        break;
+    default:
+        break;
+    }
+}
+
+static void PivotOffset_RightTurn(TurnPivot_t pivot, float *xOffsetIn, float *yOffsetIn)
+{
+    *xOffsetIn = 0.0f;
+    *yOffsetIn = 0.0f;
+
+    switch (pivot) {
+    case TURN_PIVOT_FRONT_CENTER:
+        *yOffsetIn = -4.3f;
+        *xOffsetIn = 0.7f;
+        break;
+    case TURN_PIVOT_BACK_CENTER:
+        *yOffsetIn = 4.25f;
+        *xOffsetIn = 0.1f;
+        break;
+    case TURN_PIVOT_LEFT_CENTER:
+        *xOffsetIn = -1.8f;
+        break;
+    case TURN_PIVOT_RIGHT_CENTER:
+        *xOffsetIn = 1.87f;
+        break;
+    case TURN_PIVOT_CENTER:
+        *xOffsetIn = 0.8f;
+        *yOffsetIn = 0.05f;
+        break;
     default:
         break;
     }

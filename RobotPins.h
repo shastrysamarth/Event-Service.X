@@ -15,12 +15,13 @@
 #define MOTOR_BENCH_SPEED_IPS 4.0f
 #define STRAFE_SPEED_IPS 5.0f
 #define ALIGN_SPEED_IPS 4.0f
-#define TURN_SPEED_IPS MOTOR_SPEED_IPS
+#define TURN_SPEED_IPS STRAFE_SPEED_IPS
+#define FIND_FRONT_TURN_SPEED_IPS MOTOR_SPEED_IPS
 #define MOTOR_DUTY_PER_IPS 70.0f
 #define MOTOR_MIN_ACTIVE_DUTY 0u
 
 #define FIND_FRONT_IMU_SETTLE_MS 3000u
-#define TURN_IMU_SETTLE_MS 3000u
+#define TURN_IMU_SETTLE_MS 100u
 #define SHOOT_TIME_MS 120000u
 
 #define FIND_FRONT_IMU_TIMER 0
@@ -78,7 +79,7 @@
 #define BNO055_ROBOT_Y_ACCEL_AXIS BNO055_AXIS_X
 #define BNO055_ROBOT_Y_ACCEL_SIGN (-1)
 
-/* HW-201 tape sensors: OUT is HIGH off tape and LOW on black tape. */
+/* HW-201 tape sensors: OUT is HIGH on tape and LOW off tape. */
 #define TAPE_SENSOR_1_PORT PORTZ
 #define TAPE_SENSOR_1_PIN  PIN4
 #define TAPE_SENSOR_2_PORT PORTZ
@@ -92,7 +93,12 @@
 #define TAPE_SENSOR_PORTZ_PINS (PIN4 | PIN5 | PIN8 | PIN9)
 #define TAPE_SENSOR_PORTW_PINS PIN7
 /* Active level: 1 = pin HIGH when on tape, 0 = pin LOW when on tape. */
-#define TAPE_BLACK_IS_HIGH 0
+#define TAPE_SENSOR_1_ON_IS_HIGH 1
+#define TAPE_SENSOR_2_ON_IS_HIGH 1
+#define TAPE_SENSOR_3_ON_IS_HIGH 1
+#define TAPE_SENSOR_4_ON_IS_HIGH 1
+#define TAPE_SENSOR_5_ON_IS_HIGH 1
+#define TAPE_BLACK_IS_HIGH TAPE_SENSOR_1_ON_IS_HIGH
 #define BEACON_ADC_PIN AD_PORTV8
 
 /* Beacon detector peak output is 1.65V-3.0V into the Uno32 ADC.
@@ -144,7 +150,7 @@
  * #define SOLENOID_ON_ADC_THRESHOLD 700u
  * #define SOLENOID_ON_IS_HIGH 1
  */
-#define BEACON_ADC_DELTA 20u
+#define BEACON_ADC_DELTA 5u
 
 /*
  * L298N H-bridge 1 controls front motors:
@@ -227,11 +233,11 @@
 #define BNO055_SCL_PIN_LABEL "V4"
 #define BNO055_PIN_LABEL "SDA -> V3 digital I/O, SCL -> V4 digital I/O, Euler heading tracks flat yaw"
 #define BEACON_ADC_PIN_LABEL "V8 analog input"
-#define TAPE_SENSOR_1_PIN_LABEL "HW-201 OUT -> Z4 digital input, LOW on tape"
-#define TAPE_SENSOR_2_PIN_LABEL "HW-201 OUT -> Z5 digital input, LOW on tape"
-#define TAPE_SENSOR_3_PIN_LABEL "HW-201 OUT -> W7 digital input, LOW on tape"
-#define TAPE_SENSOR_4_PIN_LABEL "HW-201 OUT -> Z8 digital input, LOW on tape"
-#define TAPE_SENSOR_5_PIN_LABEL "HW-201 OUT -> Z9 digital input, LOW on tape"
+#define TAPE_SENSOR_1_PIN_LABEL "HW-201 OUT -> Z4 digital input, HIGH on tape"
+#define TAPE_SENSOR_2_PIN_LABEL "HW-201 OUT -> Z5 digital input, HIGH on tape"
+#define TAPE_SENSOR_3_PIN_LABEL "HW-201 OUT -> W7 digital input, HIGH on tape"
+#define TAPE_SENSOR_4_PIN_LABEL "HW-201 OUT -> Z8 digital input, HIGH on tape"
+#define TAPE_SENSOR_5_PIN_LABEL "HW-201 OUT -> Z9 digital input, HIGH on tape"
 /* Solenoid pin labels intentionally disabled for now.
  * #define SOLENOID_SENSOR_1_PIN_LABEL ""
  * #define SOLENOID_SENSOR_2_PIN_LABEL ""

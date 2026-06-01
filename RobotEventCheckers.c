@@ -3,6 +3,7 @@
 #include "AlignSubHSM.h"
 #include "ES_Configure.h"
 #include "ES_Events.h"
+#include "ES_Timers.h"
 #include "FindFrontTapeSubHSM.h"
 #include "NavigateToISZSubHSM.h"
 #include "RobotHSM.h"
@@ -14,9 +15,16 @@
 #include "RobotTestHarness.h"
 #include "ShootingSubHSM.h"
 
+#include <stdint.h>
 #include <stdio.h>
+#define max(a,b) (((a) > (b)) ? (a) : (b))
 
-typedef struct {
+#define TAPE_DEBUG_SAMPLE_PERIOD_MS 0u
+#define BEACON_SAMPLE_PERIOD_MS 1u
+#define BEACON_STREAM_PRINT_PERIOD_MS 250u
+
+typedef struct
+{
     uint8_t tape[5];
     uint8_t solenoid[6];
     uint8_t bump[4];
@@ -26,61 +34,207 @@ typedef struct {
 static SensorSnapshot_t last;
 static uint8_t initialized = FALSE;
 static uint16_t lastBeaconADC = 0u;
+static uint16_t lastBeaconRawADC = 0u;
+static uint16_t lastBeaconSmoothADC = 0u;
 static uint16_t peakBeaconADC = 0u;
+static uint16_t minBeaconADC = 1024u;
 static uint8_t beaconHadIncrease = FALSE;
+static uint32_t lastTapeSampleLogMs = 0u;
+static uint8_t beaconStreamActive = FALSE;
+static uint32_t lastBeaconSampleMs = 0u;
+static uint32_t lastBeaconStreamPrintMs = 0u;
 
+static void SampleBeaconADC(void);
+static void BeaconStreamTick(void);
 static uint8_t PostEvent(ES_EventTyp_t eventType, uint16_t eventParam);
 static uint8_t PostOnRising(uint8_t current, uint8_t *previous,
-        ES_EventTyp_t eventType, uint16_t eventParam);
+                            ES_EventTyp_t eventType, uint16_t eventParam);
 static uint8_t PostOnChange(uint8_t current, uint8_t *previous,
-        ES_EventTyp_t onEvent, ES_EventTyp_t offEvent, uint16_t eventParam);
+                            ES_EventTyp_t onEvent, ES_EventTyp_t offEvent, uint16_t eventParam);
 static uint8_t IsBeaconSearchActive(void);
 static uint8_t IsRobotMisaligned(void);
 static float AbsFloat(float value);
+static void LogIMUInitial(void);
+static void LogIMUEvent(ES_EventTyp_t eventType);
+static void LogBeaconInitial(uint16_t raw, uint16_t smoothed);
+static void LogBeaconEvent(ES_EventTyp_t eventType, uint16_t current,
+                           uint16_t peak);
+static void LogShooterADCInitial(uint16_t raw);
 static void LogTapeInitial(uint8_t sensorNumber, uint8_t raw, uint8_t onTape);
 static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape,
-        ES_EventTyp_t eventType);
+                          ES_EventTyp_t eventType);
+static void LogTapeSample(const uint8_t raw[5], const uint8_t onTape[5]);
+static uint8_t TapeMaskFromReadings(const uint8_t onTape[5]);
+static void LogBumpInitial(uint8_t sensorNumber, uint8_t raw, uint8_t bumped);
+static void LogBumpChange(uint8_t sensorNumber, uint8_t raw, uint8_t bumped,
+                          ES_EventTyp_t eventType);
+static void PrintFixedValue(const char *name, float value, const char *unit);
 
 void InitRobotEventCheckers(void)
 {
     uint8_t i;
+    uint8_t raw;
+    uint16_t beaconRaw;
 
-    for (i = 0; i < 5u; i++) {
-        last.tape[i] = RobotSensors_IsTapeOn((TapeSensor_t) (i + 1u));
-        LogTapeInitial(i + 1u,
-                RobotSensors_ReadTapeDigital((TapeSensor_t) (i + 1u)),
-                last.tape[i]);
+#if ROBOT_PLUGPLAY_USE_BNO055
+    LogIMUInitial();
+#endif
+
+    for (i = 0; i < 5u; i++)
+    {
+        if (RobotPlugPlay_IsTapeEnabled(i + 1u) == FALSE)
+        {
+            last.tape[i] = FALSE;
+            continue;
+        }
+        raw = RobotSensors_ReadTapeDigital((TapeSensor_t)(i + 1u));
+        last.tape[i] = RobotSensors_TapeRawIsOn((TapeSensor_t)(i + 1u), raw);
+        LogTapeInitial(i + 1u, raw, last.tape[i]);
     }
-    for (i = 0; i < 6u; i++) {
-        last.solenoid[i] = RobotSensors_IsSolenoidOn((SolenoidSensor_t) (i + 1u));
+    for (i = 0; i < 6u; i++)
+    {
+        last.solenoid[i] = RobotSensors_IsSolenoidOn((SolenoidSensor_t)(i + 1u));
     }
-    for (i = 0; i < 4u; i++) {
-        last.bump[i] = RobotSensors_IsBumpOn((BumpSensor_t) (i + 1u));
+    for (i = 0; i < 4u; i++)
+    {
+        if (RobotPlugPlay_IsBumpEnabled(i + 1u) == FALSE)
+        {
+            last.bump[i] = FALSE;
+            continue;
+        }
+        raw = RobotSensors_ReadBumpDigital((BumpSensor_t)(i + 1u));
+        last.bump[i] = RobotSensors_BumpRawIsOn(raw);
+        LogBumpInitial(i + 1u, raw, last.bump[i]);
     }
 
     last.misaligned = FALSE;
 
-    lastBeaconADC = RobotSensors_ReadBeaconADC();
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    beaconRaw = RobotSensors_ReadBeaconRawADC();
+    lastBeaconRawADC = beaconRaw;
+    lastBeaconSmoothADC = RobotSensors_PushBeaconADC(beaconRaw);
+    lastBeaconADC = lastBeaconSmoothADC;
+    lastBeaconSampleMs = ES_Timer_GetTime();
+    LogBeaconInitial(lastBeaconRawADC, lastBeaconADC);
+#else
+    beaconRaw = 0u;
+    lastBeaconRawADC = 0u;
+    lastBeaconSmoothADC = 0u;
+    lastBeaconADC = 0u;
+#endif
     peakBeaconADC = lastBeaconADC;
+    minBeaconADC = lastBeaconADC;
     beaconHadIncrease = FALSE;
+#if ROBOT_PLUGPLAY_USE_SHOOTER_ADC
+    LogShooterADCInitial(RobotSensors_ReadShooterMotorADC());
+#endif
     initialized = TRUE;
+}
+
+void RobotEventCheckers_ToggleBeaconStream(void)
+{
+    uint32_t nowMs;
+
+#if !ROBOT_PLUGPLAY_USE_BEACON_ADC
+    printf("[SENSOR] beacon stream unavailable; rebuild with HW_BEACON=1\r\n");
+    return;
+#endif
+
+    nowMs = ES_Timer_GetTime();
+    beaconStreamActive = !beaconStreamActive;
+    if (beaconStreamActive)
+    {
+        printf("[SENSOR] beacon stream ON\r\n");
+        SampleBeaconADC();
+        lastBeaconStreamPrintMs = nowMs - BEACON_STREAM_PRINT_PERIOD_MS;
+        BeaconStreamTick();
+    }
+    else
+    {
+        printf("[SENSOR] beacon stream OFF\r\n");
+    }
+}
+
+uint8_t CheckBeaconSample(void)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    uint32_t nowMs;
+
+    if (initialized == FALSE)
+    {
+        InitRobotEventCheckers();
+    }
+
+    nowMs = ES_Timer_GetTime();
+    if ((uint32_t)(nowMs - lastBeaconSampleMs) >= BEACON_SAMPLE_PERIOD_MS)
+    {
+        SampleBeaconADC();
+    }
+#endif
+
+    return FALSE;
+}
+
+static void SampleBeaconADC(void)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    lastBeaconRawADC = RobotSensors_ReadBeaconRawADC();
+    lastBeaconSmoothADC = RobotSensors_PushBeaconADC(lastBeaconRawADC);
+    lastBeaconSampleMs = ES_Timer_GetTime();
+#endif
+}
+
+static void BeaconStreamTick(void)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    uint16_t smoothADC;
+    uint16_t rawADC;
+    uint32_t nowMs;
+
+    if (beaconStreamActive == FALSE)
+    {
+        return;
+    }
+    nowMs = ES_Timer_GetTime();
+
+    if ((uint32_t)(nowMs - lastBeaconStreamPrintMs) <
+        BEACON_STREAM_PRINT_PERIOD_MS)
+    {
+        return;
+    }
+    lastBeaconStreamPrintMs = nowMs;
+
+    rawADC = lastBeaconRawADC;
+    smoothADC = lastBeaconSmoothADC;
+
+    printf("[SENSOR] beacon rawADC=%u smoothADC=%u distance=%u ft pin=%s\r\n",
+           (unsigned int)rawADC,
+           (unsigned int)smoothADC,
+           (unsigned int)RobotSensors_BeaconDistanceFeetFromADC(smoothADC),
+           BEACON_ADC_PIN_LABEL);
+#endif
 }
 
 uint8_t CheckRobotPeriodic(void)
 {
-    if (initialized == FALSE) {
+    uint8_t keyboardHandled = FALSE;
+
+    if (initialized == FALSE)
+    {
         InitRobotEventCheckers();
     }
 
 #ifdef ROBOT_KEYBOARD_TEST
-    if (RobotTestHarness_CheckKeyboard() == TRUE) {
-        return TRUE;
+    if (RobotTestHarness_CheckKeyboard() == TRUE)
+    {
+        keyboardHandled = TRUE;
     }
 #endif
 
     RobotIMU_Update();
     RobotIMU_DebugStreamTick();
-    return FALSE;
+    BeaconStreamTick();
+    return keyboardHandled;
 }
 
 uint8_t CheckBeaconEvents(void)
@@ -91,36 +245,49 @@ uint8_t CheckBeaconEvents(void)
     return FALSE;
 #endif
 
-    if (initialized == FALSE) {
+    if (initialized == FALSE)
+    {
         InitRobotEventCheckers();
     }
 
-    current = RobotSensors_ReadBeaconADC();
+    current = lastBeaconSmoothADC;
 
-    if (IsBeaconSearchActive() == FALSE) {
+    if (IsBeaconSearchActive() == FALSE)
+    {
         lastBeaconADC = current;
         peakBeaconADC = current;
+        minBeaconADC = current;
         beaconHadIncrease = FALSE;
         return FALSE;
     }
 
-    if (current > peakBeaconADC) {
+    if (current > peakBeaconADC)
+    {
         peakBeaconADC = current;
     }
 
-    if (current >= (lastBeaconADC + BEACON_ADC_DELTA)) {
+    if (current < minBeaconADC)
+    {
+        minBeaconADC = current;
+    }
+
+    if ((beaconHadIncrease == FALSE) && 
+        (current >= (minBeaconADC + BEACON_ADC_DELTA)))
+    {
         lastBeaconADC = current;
         beaconHadIncrease = TRUE;
+        LogBeaconEvent(BeaconADCIncreaseEvent, current, peakBeaconADC);
         return PostEvent(BeaconADCIncreaseEvent, current);
     }
 
     if ((beaconHadIncrease == TRUE) &&
-            ((current + BEACON_ADC_DELTA) <= peakBeaconADC)) {
+        ((current + BEACON_ADC_DELTA) <= peakBeaconADC))
+    {
         uint16_t peak = peakBeaconADC;
 
         lastBeaconADC = current;
-        peakBeaconADC = current;
         beaconHadIncrease = FALSE;
+        LogBeaconEvent(MaxSignalFoundEvent, current, peak);
         return PostEvent(MaxSignalFoundEvent, peak);
     }
 
@@ -145,40 +312,67 @@ uint8_t CheckTapeEvents(void)
         TapeSensor5OffEvent,
     };
     uint8_t i;
+    uint8_t raw;
     uint8_t current;
+    uint8_t rawReadings[5];
+    uint8_t tapeReadings[5];
+    uint8_t tapeMask;
+    uint32_t now;
+    uint8_t postedAny = FALSE;
 
 #if !ROBOT_PLUGPLAY_USE_ANY_TAPE
     return FALSE;
 #endif
 
-    if (initialized == FALSE) {
+    if (initialized == FALSE)
+    {
         InitRobotEventCheckers();
     }
 
-    for (i = 0; i < 5u; i++) {
-        current = RobotSensors_IsTapeOn((TapeSensor_t) (i + 1u));
+    for (i = 0; i < 5u; i++)
+    {
+        raw = RobotSensors_ReadTapeDigital((TapeSensor_t)(i + 1u));
+        current = RobotSensors_TapeRawIsOn((TapeSensor_t)(i + 1u), raw);
+        rawReadings[i] = raw;
+        tapeReadings[i] = current;
+    }
+
+    tapeMask = TapeMaskFromReadings(tapeReadings);
+
+    for (i = 0; i < 5u; i++)
+    {
+        raw = rawReadings[i];
+        current = tapeReadings[i];
         if ((i == 4u) && (current == TRUE) && (last.tape[i] == FALSE) &&
-                (NavigateToISZ_IsCountingTape5() == TRUE)) {
+            (NavigateToISZ_IsCountingTape5() == TRUE))
+        {
             last.tape[i] = current;
-            LogTapeChange(i + 1u,
-                    RobotSensors_ReadTapeDigital((TapeSensor_t) (i + 1u)),
-                    current,
-                    TapeSensor5LowToHighEvent);
-            return PostEvent(TapeSensor5LowToHighEvent, 5u);
+            FindFrontTape_FastTapeReaction(TapeSensor5LowToHighEvent, tapeMask);
+            postedAny |= PostEvent(TapeSensor5LowToHighEvent, tapeMask);
+            LogTapeChange(i + 1u, raw, current, TapeSensor5LowToHighEvent);
+            continue;
         }
-        if (current != last.tape[i]) {
+        if (current != last.tape[i])
+        {
             ES_EventTyp_t eventType = current ? onEvents[i] : offEvents[i];
 
-            LogTapeChange(i + 1u,
-                    RobotSensors_ReadTapeDigital((TapeSensor_t) (i + 1u)),
-                    current,
-                    eventType);
             last.tape[i] = current;
-            return PostEvent(eventType, (uint16_t) (i + 1u));
+            FindFrontTape_FastTapeReaction(eventType, tapeMask);
+            postedAny |= PostEvent(eventType, tapeMask);
+            LogTapeChange(i + 1u, raw, current, eventType);
         }
     }
 
-    return FALSE;
+    now = ES_Timer_GetTime();
+    if ((TAPE_DEBUG_SAMPLE_PERIOD_MS > 0u) &&
+        (postedAny == FALSE) &&
+        ((uint32_t)(now - lastTapeSampleLogMs) >= TAPE_DEBUG_SAMPLE_PERIOD_MS))
+    {
+        lastTapeSampleLogMs = now;
+        LogTapeSample(rawReadings, tapeReadings);
+    }
+
+    return postedAny;
 }
 
 uint8_t CheckSolenoidEvents(void)
@@ -192,19 +386,23 @@ uint8_t CheckSolenoidEvents(void)
         Solenoid6OnEvent,
     };
     uint8_t i;
+    uint8_t raw;
     uint8_t current;
 
 #if !ROBOT_PLUGPLAY_USE_ANY_SOLENOID_ADC
     return FALSE;
 #endif
 
-    if (initialized == FALSE) {
+    if (initialized == FALSE)
+    {
         InitRobotEventCheckers();
     }
 
-    for (i = 0; i < 6u; i++) {
-        current = RobotSensors_IsSolenoidOn((SolenoidSensor_t) (i + 1u));
-        if (PostOnRising(current, &last.solenoid[i], onEvents[i], (uint16_t) (i + 1u))) {
+    for (i = 0; i < 6u; i++)
+    {
+        current = RobotSensors_IsSolenoidOn((SolenoidSensor_t)(i + 1u));
+        if (PostOnRising(current, &last.solenoid[i], onEvents[i], (uint16_t)(i + 1u)))
+        {
             return TRUE;
         }
     }
@@ -227,20 +425,29 @@ uint8_t CheckBumpEvents(void)
         BumpSensor4OffEvent,
     };
     uint8_t i;
+    uint8_t raw;
     uint8_t current;
 
 #if !ROBOT_PLUGPLAY_USE_ANY_BUMP
     return FALSE;
 #endif
 
-    if (initialized == FALSE) {
+    if (initialized == FALSE)
+    {
         InitRobotEventCheckers();
     }
 
-    for (i = 0; i < 4u; i++) {
-        current = RobotSensors_IsBumpOn((BumpSensor_t) (i + 1u));
-        if (PostOnChange(current, &last.bump[i], onEvents[i], offEvents[i], (uint16_t) (i + 1u))) {
-            return TRUE;
+    for (i = 0; i < 4u; i++)
+    {
+        raw = RobotSensors_ReadBumpDigital((BumpSensor_t)(i + 1u));
+        current = RobotSensors_BumpRawIsOn(raw);
+        if (current != last.bump[i])
+        {
+            ES_EventTyp_t eventType = current ? onEvents[i] : offEvents[i];
+
+            LogBumpChange(i + 1u, raw, current, eventType);
+            last.bump[i] = current;
+            return PostEvent(eventType, (uint16_t)(i + 1u));
         }
     }
 
@@ -250,7 +457,8 @@ uint8_t CheckBumpEvents(void)
 uint8_t CheckDistanceMove(void)
 {
     if (RobotMotion_IsDistanceMoveActive() &&
-            RobotMotion_IsDistanceMoveComplete()) {
+        RobotMotion_IsDistanceMoveComplete())
+    {
         return PostEvent(DistanceMoveCompleteEvent, 0u);
     }
 
@@ -264,7 +472,8 @@ uint8_t CheckAlignEvents(void)
 #endif
 
     if ((NavigateToISZ_IsAligning() == FALSE) &&
-            (ShootingSubHSM_IsAligning() == FALSE)) {
+        (ShootingSubHSM_IsAligning() == FALSE))
+    {
         return FALSE;
     }
 
@@ -277,7 +486,9 @@ uint8_t CheckAlignEvents(void)
     }
 #endif
 
-    if (AlignSubHSM_IsHeadingStage() && AlignSubHSM_IsHeadingAligned()) {
+    if (AlignSubHSM_IsHeadingStage() && AlignSubHSM_IsHeadingAligned())
+    {
+        LogIMUEvent(RealignedEvent);
         return PostEvent(RealignedEvent, ALIGN_REALIGNED_SOURCE_SENSOR);
     }
 
@@ -293,19 +504,25 @@ uint8_t CheckMisalignment(void)
 #endif
 
     if ((NavigateToISZ_AllowsAlign() == FALSE) &&
-            (ShootingSubHSM_AllowsAlign() == FALSE)) {
+        (ShootingSubHSM_AllowsAlign() == FALSE))
+    {
         last.misaligned = FALSE;
         return FALSE;
     }
 
     current = IsRobotMisaligned();
+    if ((current == TRUE) && (last.misaligned == FALSE))
+    {
+        LogIMUEvent(MisalignedEvent);
+    }
     return PostOnRising(current, &last.misaligned, MisalignedEvent, 0u);
 }
 
 static uint8_t PostOnRising(uint8_t current, uint8_t *previous,
-        ES_EventTyp_t eventType, uint16_t eventParam)
+                            ES_EventTyp_t eventType, uint16_t eventParam)
 {
-    if ((current == TRUE) && (*previous == FALSE)) {
+    if ((current == TRUE) && (*previous == FALSE))
+    {
         *previous = current;
         return PostEvent(eventType, eventParam);
     }
@@ -315,9 +532,10 @@ static uint8_t PostOnRising(uint8_t current, uint8_t *previous,
 }
 
 static uint8_t PostOnChange(uint8_t current, uint8_t *previous,
-        ES_EventTyp_t onEvent, ES_EventTyp_t offEvent, uint16_t eventParam)
+                            ES_EventTyp_t onEvent, ES_EventTyp_t offEvent, uint16_t eventParam)
 {
-    if (current == *previous) {
+    if (current == *previous)
+    {
         return FALSE;
     }
 
@@ -337,7 +555,9 @@ static uint8_t PostEvent(ES_EventTyp_t eventType, uint16_t eventParam)
 static uint8_t IsBeaconSearchActive(void)
 {
     return (FindFrontTape_IsBeaconSearchActive() ||
-            ShootingSubHSM_IsBeaconSearchActive()) ? TRUE : FALSE;
+            ShootingSubHSM_IsBeaconSearchActive())
+               ? TRUE
+               : FALSE;
 }
 
 static uint8_t IsRobotMisaligned(void)
@@ -353,35 +573,190 @@ static float AbsFloat(float value)
     return (value < 0.0f) ? -value : value;
 }
 
+static void LogIMUInitial(void)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[IMU] init ready=%u stationary=%u ",
+           (unsigned int)RobotIMU_IsReady(),
+           (unsigned int)RobotIMU_IsStationary());
+    PrintFixedValue("heading", RobotIMU_GetHeadingDeg(), "deg");
+    printf(" ");
+    PrintFixedValue("headingError", RobotIMU_GetHeadingErrorToZeroDeg(), "deg");
+    printf("\r\n");
+#endif
+}
+
+static void LogIMUEvent(ES_EventTyp_t eventType)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[IMU] ");
+    PrintFixedValue("headingError", RobotIMU_GetHeadingErrorToZeroDeg(), "deg");
+    printf(" ");
+    PrintFixedValue("zGyro", RobotIMU_GetZGyroDPS(), "dps");
+    printf(" stationary=%u -> %s\r\n",
+           (unsigned int)RobotIMU_IsStationary(),
+           EventNames[eventType]);
+#else
+    (void)eventType;
+#endif
+}
+
+static void LogBeaconInitial(uint16_t raw, uint16_t smoothed)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[BEACON] init raw=%u smoothed=%u distance=%u ft\r\n",
+           (unsigned int)raw,
+           (unsigned int)smoothed,
+           (unsigned int)RobotSensors_BeaconDistanceFeetFromADC(smoothed));
+#else
+    (void)raw;
+    (void)smoothed;
+#endif
+}
+
+static void LogBeaconEvent(ES_EventTyp_t eventType, uint16_t current,
+                           uint16_t peak)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[BEACON] smoothed=%u peak=%u distance=%u ft -> %s\r\n",
+           (unsigned int)current,
+           (unsigned int)peak,
+           (unsigned int)RobotSensors_BeaconDistanceFeetFromADC(current),
+           EventNames[eventType]);
+#else
+    (void)eventType;
+    (void)current;
+    (void)peak;
+#endif
+}
+
+static void LogShooterADCInitial(uint16_t raw)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[SHOOTER_ADC] init raw=%u\r\n", (unsigned int)raw);
+#else
+    (void)raw;
+#endif
+}
+
+static void PrintFixedValue(const char *name, float value, const char *unit)
+{
+    int32_t scaled = (int32_t)(value * 100.0f);
+
+    if (scaled < 0)
+    {
+        printf("%s=-%ld.%02ld %s", name,
+               (long)((-scaled) / 100),
+               (long)((-scaled) % 100),
+               unit);
+    }
+    else
+    {
+        printf("%s=%ld.%02ld %s", name,
+               (long)(scaled / 100),
+               (long)(scaled % 100),
+               unit);
+    }
+}
+
 static void LogTapeInitial(uint8_t sensorNumber, uint8_t raw, uint8_t onTape)
 {
 #if defined(DEBUG) || defined(ROBOT_DEBUG)
     printf("[TAPE] init sensor%u raw=%u line=%s onTape=%u\r\n",
-            (unsigned int) sensorNumber,
-            (unsigned int) raw,
-            raw ? "HIGH" : "LOW",
-            (unsigned int) onTape);
+           (unsigned int)sensorNumber,
+           (unsigned int)raw,
+           raw ? "HIGH" : "LOW",
+           (unsigned int)onTape);
 #else
-    (void) sensorNumber;
-    (void) raw;
-    (void) onTape;
+    (void)sensorNumber;
+    (void)raw;
+    (void)onTape;
 #endif
 }
 
 static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape,
-        ES_EventTyp_t eventType)
+                          ES_EventTyp_t eventType)
 {
 #if defined(DEBUG) || defined(ROBOT_DEBUG)
     printf("[TAPE] sensor%u raw=%u line=%s onTape=%u -> %s\r\n",
-            (unsigned int) sensorNumber,
-            (unsigned int) raw,
-            raw ? "HIGH" : "LOW",
-            (unsigned int) onTape,
-            EventNames[eventType]);
+           (unsigned int)sensorNumber,
+           (unsigned int)raw,
+           raw ? "HIGH" : "LOW",
+           (unsigned int)onTape,
+           EventNames[eventType]);
 #else
-    (void) sensorNumber;
-    (void) raw;
-    (void) onTape;
-    (void) eventType;
+    (void)sensorNumber;
+    (void)raw;
+    (void)onTape;
+    (void)eventType;
+#endif
+}
+
+static void LogTapeSample(const uint8_t raw[5], const uint8_t onTape[5])
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[TAPE] sample raw=%u/%u/%u/%u/%u on=%u/%u/%u/%u/%u\r\n",
+           (unsigned int)raw[0],
+           (unsigned int)raw[1],
+           (unsigned int)raw[2],
+           (unsigned int)raw[3],
+           (unsigned int)raw[4],
+           (unsigned int)onTape[0],
+           (unsigned int)onTape[1],
+           (unsigned int)onTape[2],
+           (unsigned int)onTape[3],
+           (unsigned int)onTape[4]);
+#else
+    (void)raw;
+    (void)onTape;
+#endif
+}
+
+static uint8_t TapeMaskFromReadings(const uint8_t onTape[5])
+{
+    uint8_t mask = 0u;
+    uint8_t i;
+
+    for (i = 0u; i < 5u; i++)
+    {
+        if (onTape[i] == TRUE)
+        {
+            mask |= (uint8_t)(1u << i);
+        }
+    }
+
+    return mask;
+}
+
+static void LogBumpInitial(uint8_t sensorNumber, uint8_t raw, uint8_t bumped)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[BUMP] init sensor%u raw=%u line=%s bumped=%u\r\n",
+           (unsigned int)sensorNumber,
+           (unsigned int)raw,
+           raw ? "HIGH" : "LOW",
+           (unsigned int)bumped);
+#else
+    (void)sensorNumber;
+    (void)raw;
+    (void)bumped;
+#endif
+}
+
+static void LogBumpChange(uint8_t sensorNumber, uint8_t raw, uint8_t bumped,
+                          ES_EventTyp_t eventType)
+{
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    printf("[BUMP] sensor%u raw=%u line=%s bumped=%u -> %s\r\n",
+           (unsigned int)sensorNumber,
+           (unsigned int)raw,
+           raw ? "HIGH" : "LOW",
+           (unsigned int)bumped,
+           EventNames[eventType]);
+#else
+    (void)sensorNumber;
+    (void)raw;
+    (void)bumped;
+    (void)eventType;
 #endif
 }

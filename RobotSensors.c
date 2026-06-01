@@ -7,6 +7,7 @@
 
 static uint8_t TapeDigitalPort(TapeSensor_t sensor);
 static uint16_t TapeDigitalPin(TapeSensor_t sensor);
+static uint8_t TapeOnIsHigh(TapeSensor_t sensor);
 static uint8_t BumpDigitalPort(BumpSensor_t sensor);
 static uint16_t BumpDigitalPin(BumpSensor_t sensor);
 static uint16_t BeaconAveragePush(uint16_t reading);
@@ -56,7 +57,30 @@ uint16_t RobotSensors_ReadBeaconRawADC(void)
 uint16_t RobotSensors_ReadBeaconADC(void)
 {
 #if ROBOT_PLUGPLAY_USE_BEACON_ADC
-    return BeaconAveragePush(RobotSensors_ReadBeaconRawADC());
+    return RobotSensors_PushBeaconADC(RobotSensors_ReadBeaconRawADC());
+#else
+    return 0u;
+#endif
+}
+
+uint16_t RobotSensors_PushBeaconADC(uint16_t reading)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    return BeaconAveragePush(reading);
+#else
+    (void)reading;
+    return 0u;
+#endif
+}
+
+uint16_t RobotSensors_GetBeaconADC(void)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    if (beaconSampleCount == 0u) {
+        return 0u;
+    }
+    return (uint16_t) ((beaconSampleSum + (beaconSampleCount / 2u)) /
+            beaconSampleCount);
 #else
     return 0u;
 #endif
@@ -139,7 +163,12 @@ uint8_t RobotSensors_IsTapeOn(TapeSensor_t sensor)
         return FALSE;
     }
     reading = RobotSensors_ReadTapeDigital(sensor);
-    return TAPE_BLACK_IS_HIGH ? (reading != 0u) : (reading == 0u);
+    return RobotSensors_TapeRawIsOn(sensor, reading);
+}
+
+uint8_t RobotSensors_TapeRawIsOn(TapeSensor_t sensor, uint8_t rawReading)
+{
+    return TapeOnIsHigh(sensor) ? (rawReading != 0u) : (rawReading == 0u);
 }
 
 uint8_t RobotSensors_IsSolenoidOn(SolenoidSensor_t sensor)
@@ -156,7 +185,12 @@ uint8_t RobotSensors_IsBumpOn(BumpSensor_t sensor)
         return FALSE;
     }
     reading = RobotSensors_ReadBumpDigital(sensor);
-    return BUMP_ON_IS_HIGH ? (reading != 0u) : (reading == 0u);
+    return RobotSensors_BumpRawIsOn(reading);
+}
+
+uint8_t RobotSensors_BumpRawIsOn(uint8_t rawReading)
+{
+    return BUMP_ON_IS_HIGH ? (rawReading != 0u) : (rawReading == 0u);
 }
 
 static uint8_t TapeDigitalPort(TapeSensor_t sensor)
@@ -192,6 +226,24 @@ static uint16_t TapeDigitalPin(TapeSensor_t sensor)
         return TAPE_SENSOR_5_PIN;
     default:
         return 0u;
+    }
+}
+
+static uint8_t TapeOnIsHigh(TapeSensor_t sensor)
+{
+    switch (sensor) {
+    case TAPE_SENSOR_1:
+        return TAPE_SENSOR_1_ON_IS_HIGH;
+    case TAPE_SENSOR_2:
+        return TAPE_SENSOR_2_ON_IS_HIGH;
+    case TAPE_SENSOR_3:
+        return TAPE_SENSOR_3_ON_IS_HIGH;
+    case TAPE_SENSOR_4:
+        return TAPE_SENSOR_4_ON_IS_HIGH;
+    case TAPE_SENSOR_5:
+        return TAPE_SENSOR_5_ON_IS_HIGH;
+    default:
+        return TAPE_BLACK_IS_HIGH;
     }
 }
 

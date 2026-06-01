@@ -86,6 +86,7 @@ static uint8_t CompleteIfRealignedTapeOn(ES_Event *event);
 static TurnPivot_t PivotForTapeSensor(uint8_t sensorNumber);
 static void DriveTapeTurn(uint8_t turnLeft);
 static void PostTapeComboEvent(const TapeAlignBranch_t *branch);
+static void PrintFixedDeg(float value);
 
 uint8_t InitAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches)
 {
@@ -225,6 +226,7 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
         RunAlignSubHSM(EXIT_EVENT);
         CurrentState = nextState;
         RunAlignSubHSM(ENTRY_EVENT);
+        RobotMotion_DebugPrintCurrentCommand("entry");
     }
 
     ES_Tail();
@@ -439,8 +441,22 @@ static const TapeAlignBranch_t *FindTapeBranchForEvent(ES_EventTyp_t eventType)
 static uint8_t StartTapeBranch(const TapeAlignBranch_t *branch,
         AlignState_t *nextState)
 {
+    float headingError;
+
     activeTapeBranch = *branch;
     *nextState = TapeTurnStateForHeading();
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    headingError = RobotIMU_GetHeadingErrorToZeroDeg();
+    printf("[ALIGN] branch %s sensors=%u+%u off pivot=tape%u headingError=",
+            EventNames[branch->comboEvent],
+            (unsigned int) branch->sensorA,
+            (unsigned int) branch->sensorB,
+            (unsigned int) branch->pivotSensor);
+    PrintFixedDeg(headingError);
+    printf(" -> %s\r\n", StateNames[*nextState]);
+#else
+    (void) headingError;
+#endif
     return TRUE;
 }
 
@@ -622,10 +638,25 @@ static void PostTapeComboEvent(const TapeAlignBranch_t *branch)
     event.EventType = branch->comboEvent;
     event.EventParam = tapeMask;
 #if defined(DEBUG) || defined(ROBOT_DEBUG)
-    printf("[ALIGN] post %s tapeMask=0x%02X pivot=tape%u\r\n",
+    printf("[ALIGN] post %s tapeMask=0x%02X pivot=tape%u headingError=",
             EventNames[branch->comboEvent],
             (unsigned int) tapeMask,
             (unsigned int) branch->pivotSensor);
+    PrintFixedDeg(RobotIMU_GetHeadingErrorToZeroDeg());
+    printf("\r\n");
 #endif
     PostRobotHSM(event);
+}
+
+static void PrintFixedDeg(float value)
+{
+    int scaled;
+
+    if (value < 0.0f) {
+        printf("-");
+        value = -value;
+    }
+
+    scaled = (int) ((value * 100.0f) + 0.5f);
+    printf("%d.%02d deg", scaled / 100, scaled % 100);
 }

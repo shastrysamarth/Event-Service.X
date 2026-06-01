@@ -7,6 +7,7 @@
 #include "RobotIMU.h"
 #include "RobotMotion.h"
 #include "RobotPins.h"
+#include "RobotSensors.h"
 
 typedef enum {
     InitPSubState,
@@ -38,7 +39,12 @@ static const char *StateNames[] = {
 
 static FindFrontTapeState_t CurrentState = InitPSubState;
 static BoundaryChoice_t boundary_choice = BOUNDARY_TOP;
+static TurnPivot_t frontTapeTurnPivot = TURN_PIVOT_RIGHT_CENTER;
 
+static uint8_t LiveTapeMask(void);
+static uint8_t EventTapeMaskOrLive(ES_Event event);
+static uint8_t TapeMaskFromEventType(ES_EventTyp_t eventType);
+static uint8_t TapeSensorNumberFromEventType(ES_EventTyp_t eventType);
 static void PostFoundFrontTape(void);
 
 uint8_t InitFindFrontTapeSubHSM(void)
@@ -47,6 +53,7 @@ uint8_t InitFindFrontTapeSubHSM(void)
 
     CurrentState = InitPSubState;
     boundary_choice = BOUNDARY_TOP;
+    frontTapeTurnPivot = TURN_PIVOT_RIGHT_CENTER;
 
     returnEvent = RunFindFrontTapeSubHSM(INIT_EVENT);
     return (returnEvent.EventType == ES_NO_EVENT) ? TRUE : FALSE;
@@ -92,7 +99,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case SpinLeftState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+            RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, FIND_FRONT_TURN_SPEED_IPS);
             break;
         case BeaconADCIncreaseEvent:
             nextState = WaitForBeaconDecreaseState;
@@ -107,9 +114,10 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case WaitForBeaconDecreaseState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+            RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, FIND_FRONT_TURN_SPEED_IPS);
             break;
         case MaxSignalFoundEvent:
+            RobotMotion_Stop();
             nextState = MoveForwardState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -136,12 +144,14 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
             break;
         case TapeSensor4OnEvent:
             boundary_choice = BOUNDARY_TOP;
+            frontTapeTurnPivot = TURN_PIVOT_RIGHT_CENTER;
             nextState = PrepTurnRightState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case TapeSensor3OnEvent:
             boundary_choice = BOUNDARY_BOTTOM;
+            frontTapeTurnPivot = TURN_PIVOT_LEFT_CENTER;
             nextState = PrepTurnLeftState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -158,12 +168,14 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
             break;
         case TapeSensor4OnEvent:
             boundary_choice = BOUNDARY_TOP;
+            frontTapeTurnPivot = TURN_PIVOT_RIGHT_CENTER;
             nextState = PrepTurnRightState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case TapeSensor3OnEvent:
             boundary_choice = BOUNDARY_BOTTOM;
+            frontTapeTurnPivot = TURN_PIVOT_LEFT_CENTER;
             nextState = PrepTurnLeftState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -176,16 +188,18 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case SlowMoveForwardState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_Forward(MOTOR_SPEED_IPS - 1);
+            RobotMotion_Forward(MOTOR_SPEED_IPS);
             break;
         case TapeSensor4OnEvent:
             boundary_choice = BOUNDARY_TOP;
+            frontTapeTurnPivot = TURN_PIVOT_RIGHT_CENTER;
             nextState = PrepTurnRightState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case TapeSensor3OnEvent:
             boundary_choice = BOUNDARY_BOTTOM;
+            frontTapeTurnPivot = TURN_PIVOT_LEFT_CENTER;
             nextState = PrepTurnLeftState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -217,17 +231,29 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case TurnRightState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_TurnRightAbout(TURN_PIVOT_RIGHT_CENTER, TURN_SPEED_IPS);
+            if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
+                RobotMotion_Stop();
+                PostFoundFrontTape();
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else {
+                RobotMotion_TurnRightAbout(frontTapeTurnPivot, TURN_SPEED_IPS);
+            }
             break;
+        case TapeSensor1OnEvent:
+        case TapeSensor1OffEvent:
+        case TapeSensor2OnEvent:
+        case TapeSensor2OffEvent:
+        case TapeSensor3OnEvent:
+        case TapeSensor3OffEvent:
+        case TapeSensor4OnEvent:
         case TapeSensor4OffEvent:
-            nextState = SlowMoveForwardState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
         case TapeSensor5OnEvent:
-            RobotMotion_Stop();
-            PostFoundFrontTape();
-            ThisEvent.EventType = ES_NO_EVENT;
+        case TapeSensor5OffEvent:
+            if ((EventTapeMaskOrLive(ThisEvent) & TAPE_SENSOR_5_MASK) != 0u) {
+                RobotMotion_Stop();
+                PostFoundFrontTape();
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         default:
             break;
@@ -256,18 +282,30 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case TurnLeftState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_TurnLeftAbout(TURN_PIVOT_LEFT_CENTER, TURN_SPEED_IPS);
+            if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
+                RobotMotion_Stop();
+                PostFoundFrontTape();
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else {
+                RobotMotion_TurnLeftAbout(frontTapeTurnPivot, TURN_SPEED_IPS);
+            }
             break;
+        case TapeSensor1OnEvent:
+        case TapeSensor1OffEvent:
+        case TapeSensor2OnEvent:
+        case TapeSensor2OffEvent:
+        case TapeSensor3OnEvent:
         case TapeSensor3OffEvent:
-            nextState = SlowMoveForwardState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
+        case TapeSensor4OnEvent:
+        case TapeSensor4OffEvent:
         case TapeSensor5OnEvent:
-            RobotMotion_Stop();
-            PostFoundFrontTape();
-            ThisEvent.EventType = ES_NO_EVENT;
+            if ((EventTapeMaskOrLive(ThisEvent) & TAPE_SENSOR_5_MASK) != 0u) {
+                RobotMotion_Stop();
+                PostFoundFrontTape();
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
+        case TapeSensor5OffEvent:
         default:
             break;
         }
@@ -281,6 +319,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
         RunFindFrontTapeSubHSM(EXIT_EVENT);
         CurrentState = nextState;
         RunFindFrontTapeSubHSM(ENTRY_EVENT);
+        RobotMotion_DebugPrintCurrentCommand("entry");
     }
 
     ES_Tail();
@@ -298,9 +337,149 @@ uint8_t FindFrontTape_IsBeaconSearchActive(void)
             (CurrentState == WaitForBeaconDecreaseState)) ? TRUE : FALSE;
 }
 
+void FindFrontTape_FastTapeReaction(ES_EventTyp_t eventType, uint8_t tapeMask)
+{
+    (void) eventType;
+
+    switch (CurrentState) {
+    case MoveForwardState:
+        if ((tapeMask & TAPE_SENSOR_1_MASK) != 0u) {
+            RobotMotion_Forward(MOTOR_SPEED_IPS);
+        }
+        if ((tapeMask & TAPE_SENSOR_5_MASK) != 0u) {
+            RobotMotion_Reverse(MOTOR_SPEED_IPS);
+        }
+        if ((tapeMask & (TAPE_SENSOR_3_MASK | TAPE_SENSOR_4_MASK)) != 0u) {
+            RobotMotion_Stop();
+        }
+        break;
+    case SlowMoveForwardState:
+        if ((tapeMask & (TAPE_SENSOR_3_MASK | TAPE_SENSOR_4_MASK)) != 0u) {
+            RobotMotion_Stop();
+        }
+        break;
+    case TurnRightState:
+        if ((tapeMask & TAPE_SENSOR_5_MASK) != 0u) {
+            RobotMotion_Stop();
+        }
+        break;
+    case TurnLeftState:
+        if ((tapeMask & TAPE_SENSOR_5_MASK) != 0u) {
+            RobotMotion_Stop();
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 const char *FindFrontTape_GetStateName(void)
 {
     return StateNames[CurrentState];
+}
+
+static uint8_t LiveTapeMask(void)
+{
+    uint8_t tapeMask = 0u;
+
+    if (RobotSensors_IsTapeOn(TAPE_SENSOR_1) == TRUE) {
+        tapeMask |= TAPE_SENSOR_1_MASK;
+    }
+    if (RobotSensors_IsTapeOn(TAPE_SENSOR_2) == TRUE) {
+        tapeMask |= TAPE_SENSOR_2_MASK;
+    }
+    if (RobotSensors_IsTapeOn(TAPE_SENSOR_3) == TRUE) {
+        tapeMask |= TAPE_SENSOR_3_MASK;
+    }
+    if (RobotSensors_IsTapeOn(TAPE_SENSOR_4) == TRUE) {
+        tapeMask |= TAPE_SENSOR_4_MASK;
+    }
+    if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
+        tapeMask |= TAPE_SENSOR_5_MASK;
+    }
+
+    return tapeMask;
+}
+
+static uint8_t EventTapeMaskOrLive(ES_Event event)
+{
+    uint8_t sensorNumber = TapeSensorNumberFromEventType(event.EventType);
+    uint8_t eventSensorMask = TapeMaskFromEventType(event.EventType);
+    uint8_t liveMask = LiveTapeMask();
+
+    if ((sensorNumber != 0u) && (event.EventParam == sensorNumber)) {
+        switch (event.EventType) {
+        case TapeSensor1OnEvent:
+        case TapeSensor2OnEvent:
+        case TapeSensor3OnEvent:
+        case TapeSensor4OnEvent:
+        case TapeSensor5OnEvent:
+        case TapeSensor5LowToHighEvent:
+            return (uint8_t) (liveMask | eventSensorMask);
+        case TapeSensor1OffEvent:
+        case TapeSensor2OffEvent:
+        case TapeSensor3OffEvent:
+        case TapeSensor4OffEvent:
+        case TapeSensor5OffEvent:
+            return (uint8_t) (liveMask & (uint8_t) ~eventSensorMask);
+        default:
+            break;
+        }
+    }
+
+    if ((event.EventParam & TAPE_SENSOR_ALL_MASK) != 0u) {
+        return (uint8_t) (event.EventParam & TAPE_SENSOR_ALL_MASK);
+    }
+
+    return liveMask;
+}
+
+static uint8_t TapeMaskFromEventType(ES_EventTyp_t eventType)
+{
+    switch (eventType) {
+    case TapeSensor1OnEvent:
+    case TapeSensor1OffEvent:
+        return TAPE_SENSOR_1_MASK;
+    case TapeSensor2OnEvent:
+    case TapeSensor2OffEvent:
+        return TAPE_SENSOR_2_MASK;
+    case TapeSensor3OnEvent:
+    case TapeSensor3OffEvent:
+        return TAPE_SENSOR_3_MASK;
+    case TapeSensor4OnEvent:
+    case TapeSensor4OffEvent:
+        return TAPE_SENSOR_4_MASK;
+    case TapeSensor5OnEvent:
+    case TapeSensor5OffEvent:
+    case TapeSensor5LowToHighEvent:
+        return TAPE_SENSOR_5_MASK;
+    default:
+        return 0u;
+    }
+}
+
+static uint8_t TapeSensorNumberFromEventType(ES_EventTyp_t eventType)
+{
+    switch (eventType) {
+    case TapeSensor1OnEvent:
+    case TapeSensor1OffEvent:
+        return 1u;
+    case TapeSensor2OnEvent:
+    case TapeSensor2OffEvent:
+        return 2u;
+    case TapeSensor3OnEvent:
+    case TapeSensor3OffEvent:
+        return 3u;
+    case TapeSensor4OnEvent:
+    case TapeSensor4OffEvent:
+        return 4u;
+    case TapeSensor5OnEvent:
+    case TapeSensor5OffEvent:
+    case TapeSensor5LowToHighEvent:
+        return 5u;
+    default:
+        return 0u;
+    }
 }
 
 static void PostFoundFrontTape(void)

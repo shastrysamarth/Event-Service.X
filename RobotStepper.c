@@ -10,13 +10,17 @@ static int16_t currentStep = 0;
 
 uint8_t RobotStepper_Init(void)
 {
-#if ROBOT_PLUGPLAY_USE_STEPPER
+    /* Hold STEP/DIR quiet even when the stepper feature is compiled off.
+     * The driver may still be physically connected during drive-only tests. */
+    STEPPER_STEP_LAT = 0;
+    STEPPER_DIR_LAT = 0;
     STEPPER_STEP_TRIS = 0;
     STEPPER_DIR_TRIS = 0;
-#if STEPPER_HAS_ENABLE_PIN
+#if ROBOT_PLUGPLAY_USE_STEPPER && STEPPER_HAS_ENABLE_PIN
     STEPPER_ENABLE_TRIS = 0;
 #endif
     RobotStepper_Disable();
+#if ROBOT_PLUGPLAY_USE_STEPPER
     currentStep = LAUNCHER_STEPPER_HOME_STEP;
 #endif
     return TRUE;
@@ -35,14 +39,13 @@ void RobotStepper_Enable(void)
 
 void RobotStepper_Disable(void)
 {
-#if ROBOT_PLUGPLAY_USE_STEPPER
     STEPPER_STEP_LAT = 0;
-#if STEPPER_HAS_ENABLE_PIN
+    STEPPER_DIR_LAT = 0;
+#if ROBOT_PLUGPLAY_USE_STEPPER && STEPPER_HAS_ENABLE_PIN
 #if STEPPER_ENABLE_ACTIVE_LOW
     STEPPER_ENABLE_LAT = 1;
 #else
     STEPPER_ENABLE_LAT = 0;
-#endif
 #endif
 #endif
 }

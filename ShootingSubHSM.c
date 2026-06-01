@@ -165,6 +165,7 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
         RunShootingSubHSM(EXIT_EVENT);
         CurrentState = nextState;
         RunShootingSubHSM(ENTRY_EVENT);
+        RobotMotion_DebugPrintCurrentCommand("entry");
     }
 
     ES_Tail();

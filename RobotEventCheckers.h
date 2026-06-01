@@ -4,7 +4,9 @@
 #include "BOARD.h"
 
 void InitRobotEventCheckers(void);
+void RobotEventCheckers_ToggleBeaconStream(void);
 
+uint8_t CheckBeaconSample(void);
 uint8_t CheckRobotPeriodic(void);
 uint8_t CheckBeaconEvents(void);
 uint8_t CheckTapeEvents(void);

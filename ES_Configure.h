@@ -76,66 +76,12 @@ typedef enum {
     NUMBEROFEVENTS,
 } ES_EventTyp_t;
 
-static const char *EventNames[] = {
-    "ES_NO_EVENT",
-    "ES_ERROR",
-    "ES_INIT",
-    "ES_ENTRY",
-    "ES_EXIT",
-    "ES_KEYINPUT",
-    "ES_LISTEVENTS",
-    "ES_TIMEOUT",
-    "ES_TIMERACTIVE",
-    "ES_TIMERSTOPPED",
-    "BeaconADCIncreaseEvent",
-    "MaxSignalFoundEvent",
-    "TapeSensor1OnEvent",
-    "TapeSensor1OffEvent",
-    "TapeSensor2OnEvent",
-    "TapeSensor2OffEvent",
-    "TapeSensor3OnEvent",
-    "TapeSensor3OffEvent",
-    "TapeSensor4OnEvent",
-    "TapeSensor4OffEvent",
-    "TapeSensor5OnEvent",
-    "TapeSensor5OffEvent",
-    "TapeSensor5LowToHighEvent",
-    "TapeSensor1And2OffEvent",
-    "TapeSensor1And5OffEvent",
-    "TapeSensor2And5OffEvent",
-    "TapeSensor3And4OffEvent",
-    "TapeSensor3And5OffEvent",
-    "TapeSensor4And5OffEvent",
-    "Solenoid1OnEvent",
-    "Solenoid2OnEvent",
-    "Solenoid3OnEvent",
-    "Solenoid4OnEvent",
-    "Solenoid5OnEvent",
-    "Solenoid6OnEvent",
-    "BumpSensor1OnEvent",
-    "BumpSensor1OffEvent",
-    "BumpSensor2OnEvent",
-    "BumpSensor2OffEvent",
-    "BumpSensor3OnEvent",
-    "BumpSensor3OffEvent",
-    "BumpSensor4OnEvent",
-    "BumpSensor4OffEvent",
-    "MisalignedEvent",
-    "PositionRealignedEvent",
-    "RealignedEvent",
-    "DistanceMoveCompleteEvent",
-    "FoundFrontTapeEvent",
-    "ReachedISZEvent",
-    "InsideISZEvent",
-    "SetEvent",
-    "DoneEvent",
-    "NUMBEROFEVENTS",
-};
+extern const char * const EventNames[];
 
 #define EVENT_CHECK_HEADER "RobotEventCheckers.h"
-#define EVENT_CHECK_LIST CheckRobotPeriodic, CheckBeaconEvents, \
-    CheckTapeEvents, CheckSolenoidEvents, \
-    CheckBumpEvents, CheckDistanceMove, CheckAlignEvents, CheckMisalignment
+#define EVENT_CHECK_LIST CheckBeaconSample, CheckTapeEvents, CheckBumpEvents, \
+    CheckDistanceMove, CheckRobotPeriodic, CheckBeaconEvents, CheckSolenoidEvents, \
+    CheckAlignEvents, CheckMisalignment
 
 #define TIMER_UNUSED ((pPostFunc)0)
 #define TIMER0_RESP_FUNC PostRobotHSM

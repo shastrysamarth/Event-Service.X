@@ -5,6 +5,7 @@
 #include "RobotDebug.h"
 #include "NavigateToISZSubHSM.h"
 #include "RobotHardware.h"
+#include "RobotMotion.h"
 #include "ShootingSubHSM.h"
 
 typedef enum {
@@ -110,6 +111,7 @@ ES_Event RunRobotHSM(ES_Event ThisEvent)
         RunRobotHSM(EXIT_EVENT);
         CurrentState = nextState;
         RunRobotHSM(ENTRY_EVENT);
+        RobotMotion_DebugPrintCurrentCommand("entry");
     }
 
     ES_Tail();

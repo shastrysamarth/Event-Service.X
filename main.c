@@ -15,6 +15,7 @@ void main(void)
 #endif
 
     BOARD_Init();
+    printf("[BOOT] serial ready, initializing hardware\r\n");
     RobotHardware_Init();
 
 #ifdef ROBOT_MOTOR_SENSOR_TEST

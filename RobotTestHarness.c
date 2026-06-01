@@ -3,6 +3,7 @@
 #include "ES_Configure.h"
 #include "ES_Events.h"
 #include "RobotDebug.h"
+#include "RobotEventCheckers.h"
 #include "RobotHSM.h"
 #include "RobotHardware.h"
 #include "RobotIMU.h"
@@ -20,6 +21,8 @@
 
 #if defined(ROBOT_MOTOR_SENSOR_TEST) || defined(ROBOT_KEYBOARD_TEST)
 static uint8_t CommandUsesStrafeSpeed(const char *commandName);
+static float MotorCommandSpeedIPS(const char *commandName, float normalSpeedIPS);
+static unsigned int MotorDutyForSpeed(float speedIPS);
 
 static uint8_t CommandUsesStrafeSpeed(const char *commandName)
 {
@@ -36,6 +39,25 @@ static uint8_t CommandUsesStrafeSpeed(const char *commandName)
         return TRUE;
     }
     return FALSE;
+}
+
+static float MotorCommandSpeedIPS(const char *commandName, float normalSpeedIPS)
+{
+    return CommandUsesStrafeSpeed(commandName) ? STRAFE_SPEED_IPS : normalSpeedIPS;
+}
+
+static unsigned int MotorDutyForSpeed(float speedIPS)
+{
+    float magnitude = (speedIPS < 0.0f) ? -speedIPS : speedIPS;
+    unsigned int duty = (unsigned int) (magnitude * MOTOR_DUTY_PER_IPS);
+
+    if ((duty > 0u) && (duty < (unsigned int) MOTOR_MIN_ACTIVE_DUTY)) {
+        duty = (unsigned int) MOTOR_MIN_ACTIVE_DUTY;
+    }
+    if (duty > (unsigned int) MAX_PWM) {
+        duty = (unsigned int) MAX_PWM;
+    }
+    return duty;
 }
 #endif
 
@@ -92,13 +114,20 @@ static uint8_t benchMotorSequenceStep = 0u;
 static uint16_t activeSensorMask = 0u;
 static char activeDriveCommandKey = '\0';
 
+
 void RobotTestHarness_RunMotorSensorBench(void)
 {
     unsigned int lastSensorPrintTime;
+    unsigned int lastBeaconSampleTime;
 
     TIMERS_Init();
+    RobotStepper_Init();
+    RobotStepper_ZeroPosition();
+    RobotStepper_Disable();
+    printf("[STEPPER] initialized at step 0; STEP/DIR driven LOW for bench idle\r\n");
     BenchPrintHelp();
     lastSensorPrintTime = TIMERS_GetTime();
+    lastBeaconSampleTime = lastSensorPrintTime;
 
     for (;;) {
         unsigned int now;
@@ -112,6 +141,16 @@ void RobotTestHarness_RunMotorSensorBench(void)
         }
 
         now = TIMERS_GetTime();
+
+        /* Push a new ADC sample into the moving average every 1ms, independent
+         * of the 250ms print rate. This matches the HSM event-checker cadence
+         * and lets the 10-sample window settle in ~10ms instead of ~2.5s. */
+        if ((activeSensorMask & BENCH_SENSOR_MASK(BENCH_SENSOR_BEACON)) &&
+                ((unsigned int) (now - lastBeaconSampleTime) >= 1u)) {
+            RobotSensors_ReadBeaconADC();
+            lastBeaconSampleTime = now;
+        }
+
         if ((activeSensorMask != 0u) &&
                 ((unsigned int) (now - lastSensorPrintTime) >= BENCH_SENSOR_PERIOD_MS)) {
             BenchPrintActiveSensors();
@@ -125,6 +164,7 @@ static void BenchPrintHelp(void)
     printf("\r\n[BENCH] Direct motor/sensor harness, no HSM\r\n");
     printf("[BENCH] no sensor streaming at startup\r\n");
     printf("[BENCH] ? help, ! hardware pin map, . print active sensors once\r\n");
+    printf("[IMU] I print one BNO055/gyro snapshot\r\n");
     printf("[SENSOR] toggle streams: t/y/u/i/o tape 1/2/3/4/5\r\n");
     printf("[SENSOR] toggle streams: f/g/h/j bump FR/FL/RR/RL, b beacon\r\n");
     printf("[SENSOR] p toggle all sensors, l turn all sensor streams off\r\n");
@@ -169,6 +209,10 @@ static uint8_t BenchHandleSensorKey(char key)
         return TRUE;
     case '.':
         BenchPrintActiveSensors();
+        return TRUE;
+    case 'I':
+        RobotIMU_Update();
+        RobotIMU_PrintDebugSnapshot();
         return TRUE;
     case 'p':
         activeSensorMask = (activeSensorMask == BENCH_SENSOR_ALL_MASK) ? 0u :
@@ -317,34 +361,34 @@ static const char *BenchRunDriveCommand(char key)
         BenchPrintWheelPattern("strafe right", "FL- FR+ RL+ RR-");
         return "strafe right";
     case '5':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
         return "turn left about center";
     case '6':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
         return "turn right about center";
     case '7':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_FRONT_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_FRONT_CENTER, TURN_SPEED_IPS);
         return "turn left about front center";
     case '8':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_FRONT_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnRightAbout(TURN_PIVOT_FRONT_CENTER, TURN_SPEED_IPS);
         return "turn right about front center";
     case '9':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_BACK_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_BACK_CENTER, TURN_SPEED_IPS);
         return "turn left about back center";
     case '0':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_BACK_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnRightAbout(TURN_PIVOT_BACK_CENTER, TURN_SPEED_IPS);
         return "turn right about back center";
     case 'q':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_LEFT_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_LEFT_CENTER, TURN_SPEED_IPS);
         return "turn left about left center";
     case 'e':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_LEFT_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnRightAbout(TURN_PIVOT_LEFT_CENTER, TURN_SPEED_IPS);
         return "turn right about left center";
     case 'a':
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_RIGHT_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_RIGHT_CENTER, TURN_SPEED_IPS);
         return "turn left about right center";
     case 'd':
-        RobotMotion_TurnRightAbout(TURN_PIVOT_RIGHT_CENTER, benchMotorSpeedIPS);
+        RobotMotion_TurnRightAbout(TURN_PIVOT_RIGHT_CENTER, TURN_SPEED_IPS);
         return "turn right about right center";
     case 'F':
         RobotMotion_TestWheelSpeeds(benchMotorSpeedIPS, 0.0f, 0.0f, 0.0f);
@@ -378,6 +422,8 @@ static const char *BenchRunDriveCommand(char key)
 static void BenchReapplyDriveCommand(const char *changeName)
 {
     const char *driveCommandName;
+    float speedIPS;
+    unsigned int duty;
 
     if (activeDriveCommandKey == '\0') {
         BenchPrintMotorCommand(changeName);
@@ -385,18 +431,27 @@ static void BenchReapplyDriveCommand(const char *changeName)
     }
 
     driveCommandName = BenchRunDriveCommand(activeDriveCommandKey);
-    printf("[MOTOR] %s; reapplied %s at %u in/s\r\n",
+    speedIPS = MotorCommandSpeedIPS(driveCommandName, benchMotorSpeedIPS);
+    duty = MotorDutyForSpeed(speedIPS);
+    printf("[MOTOR] %s; reapplied %s at %u in/s, duty %u/%u%s\r\n",
             changeName,
             driveCommandName,
-            (unsigned int) (CommandUsesStrafeSpeed(driveCommandName) ?
-            STRAFE_SPEED_IPS : benchMotorSpeedIPS));
+            (unsigned int) speedIPS,
+            duty,
+            (unsigned int) MAX_PWM,
+            (duty >= (unsigned int) MAX_PWM) ? " CLAMPED" : "");
 }
 
 static void BenchPrintMotorCommand(const char *commandName)
 {
-    printf("[MOTOR] %s at %u in/s\r\n", commandName,
-            (unsigned int) (CommandUsesStrafeSpeed(commandName) ?
-            STRAFE_SPEED_IPS : benchMotorSpeedIPS));
+    float speedIPS = MotorCommandSpeedIPS(commandName, benchMotorSpeedIPS);
+    unsigned int duty = MotorDutyForSpeed(speedIPS);
+
+    printf("[MOTOR] %s at %u in/s, duty %u/%u%s\r\n", commandName,
+            (unsigned int) speedIPS,
+            duty,
+            (unsigned int) MAX_PWM,
+            (duty >= (unsigned int) MAX_PWM) ? " CLAMPED" : "");
 }
 
 static void BenchPrintWheelPattern(const char *commandName,
@@ -549,7 +604,7 @@ static void BenchPrintBump(BumpSensor_t sensor, const char *name, const char *pi
 static void BenchPrintBeacon(void)
 {
     uint16_t rawADC = RobotSensors_ReadBeaconRawADC();
-    uint16_t smoothADC = RobotSensors_ReadBeaconADC();
+    uint16_t smoothADC = RobotSensors_GetBeaconADC();
 
     printf("[SENSOR] beacon rawADC=%u smoothADC=%u distance=%u ft pin=%s\r\n",
             (unsigned int) rawADC,
@@ -565,14 +620,22 @@ static void BenchPrintBeacon(void)
 static void BeaconBenchPrintHelp(void);
 static void BeaconBenchPrintReading(void);
 
+/* Event-trigger tracking: mirrors CheckBeaconEvents() so the stream can show
+ * whether BeaconADCIncreaseEvent or MaxSignalFoundEvent would fire. */
+static uint16_t beaconBenchLastADC = 0u;
+static uint16_t beaconBenchPeakADC = 0u;
+static uint8_t beaconBenchHadIncrease = FALSE;
+
 void RobotTestHarness_RunBeaconBench(void)
 {
     unsigned int lastPrintTime;
-    uint8_t streaming = TRUE;
+    unsigned int lastSampleTime;
+    uint8_t streaming = FALSE;
 
     TIMERS_Init();
     BeaconBenchPrintHelp();
     lastPrintTime = TIMERS_GetTime();
+    lastSampleTime = lastPrintTime;
 
     for (;;) {
         unsigned int now;
@@ -586,13 +649,16 @@ void RobotTestHarness_RunBeaconBench(void)
             case '.':
                 BeaconBenchPrintReading();
                 break;
-            case 'p':
-                streaming = TRUE;
-                printf("[BEACON] stream ON\r\n");
-                break;
-            case 'l':
-                streaming = FALSE;
-                printf("[BEACON] stream paused\r\n");
+            case 'b':
+                streaming = !streaming;
+                if (streaming) {
+                    beaconBenchLastADC = 0u;
+                    beaconBenchPeakADC = 0u;
+                    beaconBenchHadIncrease = FALSE;
+                    printf("[BEACON] stream ON\r\n");
+                } else {
+                    printf("[BEACON] stream OFF\r\n");
+                }
                 break;
             default:
                 break;
@@ -601,7 +667,32 @@ void RobotTestHarness_RunBeaconBench(void)
         }
 
         now = TIMERS_GetTime();
-        if ((streaming != FALSE) &&
+
+        /* Sample the ADC and update event-trigger state every 5ms when streaming,
+         * matching the HSM event-checker cadence. */
+        if (streaming && ((unsigned int) (now - lastSampleTime) >= 5u)) {
+            uint16_t s = RobotSensors_ReadBeaconADC();
+
+            if (beaconBenchLastADC == 0u && beaconBenchPeakADC == 0u) {
+                beaconBenchLastADC = s;
+                beaconBenchPeakADC = s;
+            } else {
+                if (s > beaconBenchPeakADC) {
+                    beaconBenchPeakADC = s;
+                }
+                if (s >= (beaconBenchLastADC + BEACON_ADC_DELTA)) {
+                    beaconBenchHadIncrease = TRUE;
+                } else if ((beaconBenchHadIncrease == TRUE) &&
+                        ((s + BEACON_ADC_DELTA) <= beaconBenchPeakADC)) {
+                    beaconBenchPeakADC = s;
+                    beaconBenchHadIncrease = FALSE;
+                }
+                beaconBenchLastADC = s;
+            }
+            lastSampleTime = now;
+        }
+
+        if (streaming &&
                 ((unsigned int) (now - lastPrintTime) >= BEACON_BENCH_PERIOD_MS)) {
             BeaconBenchPrintReading();
             lastPrintTime = now;
@@ -618,20 +709,30 @@ static void BeaconBenchPrintHelp(void)
     printf("[BEACON] expected ADC: ~%u at 16+ ft, ~%u at 6 ft or closer\r\n",
             (unsigned int) BEACON_ADC_AT_16FT,
             (unsigned int) BEACON_ADC_AT_6FT);
-    printf("[BEACON] ? help, . one reading, p stream, l pause\r\n\r\n");
+    printf("[BEACON] event thresholds: BEACON_ADC_DELTA=%u\r\n",
+            (unsigned int) BEACON_ADC_DELTA);
+    printf("[BEACON] ? help, . one reading, b toggle stream\r\n\r\n");
 }
 
 static void BeaconBenchPrintReading(void)
 {
     uint16_t rawADC = RobotSensors_ReadBeaconRawADC();
-    uint16_t smoothADC = RobotSensors_ReadBeaconADC();
-    uint8_t distanceFeet = RobotSensors_BeaconDistanceFeetFromADC(smoothADC);
+    uint16_t smoothADC = RobotSensors_GetBeaconADC();
+    uint8_t wouldIncrease = (smoothADC >= (beaconBenchLastADC + BEACON_ADC_DELTA));
+    uint8_t wouldPeak = (beaconBenchHadIncrease == TRUE) &&
+            ((uint16_t) (smoothADC + BEACON_ADC_DELTA) <= beaconBenchPeakADC);
+    int16_t delta = (int16_t) smoothADC - (int16_t) beaconBenchLastADC;
 
-    printf("[BEACON] rawADC=%u smoothADC=%u approxDistance=%u ft pin=%s\r\n",
+    printf("[BEACON] raw=%u avg=%u last=%u peak=%u delta=%c%u/%u%s%s\r\n",
             (unsigned int) rawADC,
             (unsigned int) smoothADC,
-            (unsigned int) distanceFeet,
-            BEACON_ADC_PIN_LABEL);
+            (unsigned int) beaconBenchLastADC,
+            (unsigned int) beaconBenchPeakADC,
+            (delta >= 0) ? '+' : '-',
+            (unsigned int) ((delta >= 0) ? (uint16_t) delta : (uint16_t) -delta),
+            (unsigned int) BEACON_ADC_DELTA,
+            wouldIncrease ? " [INCREASING]" : "",
+            wouldPeak ? " [PEAKED]" : "");
 }
 #endif
 
@@ -790,6 +891,10 @@ uint8_t RobotTestHarness_CheckKeyboard(void)
         RobotIMU_ToggleDebugStream();
         return TRUE;
     }
+    if (key == 'V') {
+        RobotEventCheckers_ToggleBeaconStream();
+        return TRUE;
+    }
 
     if (motorTestMode == TRUE) {
         return HandleMotorTestKey(key);
@@ -814,6 +919,7 @@ void RobotTestHarness_PrintHelp(void)
     printf("[TEST] # prints module variables\r\n");
     printf("[TEST] $ prints one BNO055 raw/status snapshot\r\n");
     printf("[TEST] @ toggles live BNO055 raw/status stream\r\n");
+    printf("[TEST] V toggles beacon raw/smoothed ADC stream\r\n");
     printf("[TEST] * toggles direct motor-control test mode\r\n");
     printf("[TEST] key ranges: 0-9, a-z, A-Z in EventNames[] order\r\n");
     printf("\r\n");
@@ -928,9 +1034,14 @@ static void PrintMotorTestHelp(void)
 
 static void PrintMotorCommand(const char *commandName)
 {
-    printf("[MOTOR] %s at %u in/s\r\n", commandName,
-            (unsigned int) (CommandUsesStrafeSpeed(commandName) ?
-            STRAFE_SPEED_IPS : motorTestSpeedIPS));
+    float speedIPS = MotorCommandSpeedIPS(commandName, motorTestSpeedIPS);
+    unsigned int duty = MotorDutyForSpeed(speedIPS);
+
+    printf("[MOTOR] %s at %u in/s, duty %u/%u%s\r\n", commandName,
+            (unsigned int) speedIPS,
+            duty,
+            (unsigned int) MAX_PWM,
+            (duty >= (unsigned int) MAX_PWM) ? " CLAMPED" : "");
 }
 
 static void RunMotorSequenceStep(void)

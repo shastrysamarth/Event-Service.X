@@ -29,5 +29,6 @@ DistanceAxis_t RobotMotion_GetDistanceAxis(void);
 int8_t RobotMotion_GetDistanceDirection(void);
 /* DEPRECATED name: target inches; used only for debug display (completion is timed). */
 float RobotMotion_GetDistanceTargetInches(void);
+void RobotMotion_DebugPrintCurrentCommand(const char *context);
 
 #endif /* ROBOT_MOTION_H */

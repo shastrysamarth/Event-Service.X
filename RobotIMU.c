@@ -87,6 +87,7 @@ static void I2CDelay(void);
 static uint8_t I2CWaitSclHigh(void);
 static uint8_t BNO055ProbeAddress(uint8_t address);
 static uint8_t BNO055Find(void);
+static uint8_t BNO055ReadChipIdAt(uint8_t address, uint8_t *chipId);
 static uint8_t BNO055Write8(uint8_t reg, uint8_t value);
 static uint8_t BNO055ReadLen(uint8_t reg, uint8_t *buffer, uint8_t length);
 static uint8_t BNO055Read8(uint8_t reg, uint8_t *value);
@@ -115,14 +116,62 @@ static void PrintFloat100(float value);
 uint8_t RobotIMU_Init(void)
 {
 #if ROBOT_PLUGPLAY_USE_BNO055
-    I2CInit();
-    DelayMs(50u);
+    uint16_t tries;
 
-    if (BNO055Find() != TRUE) {
+    I2CInit();
+
+    /* BNO055 datasheet: up to 650ms after VDD ramp before I2C is ready.
+     * Poll the bus in 50ms slices (13 tries = up to ~650ms) so a power-on
+     * race between the PIC32 and the sensor doesn't cause a permanent failure.
+     * Each I2CInit() attempt also re-runs the 9-pulse SDA recovery so transient
+     * stuck-bus conditions from a previous session are cleared each slice. */
+    for (tries = 0u; tries < 13u; tries++) {
+        BNO_SDA_TRIS = 1;
+        BNO_SCL_TRIS = 1;
+        I2CDelay();
+        if ((BNO_SDA_BIT != 0) && (BNO_SCL_BIT != 0)) {
+            break;
+        }
+        DelayMs(50u);
+        I2CInit();
+    }
+
+    if ((BNO_SDA_BIT == 0) || (BNO_SCL_BIT == 0)) {
         imuReady = FALSE;
 #ifdef ROBOT_DEBUG
-        printf("[DEBUG][IMU] BNO055 not found on SDA %s / SCL %s\r\n",
-                BNO055_SDA_PIN_LABEL, BNO055_SCL_PIN_LABEL);
+        printf("[DEBUG][IMU] BNO055 bus stuck before probe on SDA %s / SCL %s "
+                "(idle SDA=%u SCL=%u, expected 1/1)\r\n",
+                BNO055_SDA_PIN_LABEL, BNO055_SCL_PIN_LABEL,
+                (unsigned int) BNO_SDA_BIT, (unsigned int) BNO_SCL_BIT);
+#endif
+        return FALSE;
+    }
+    DelayMs(50u);
+
+    for (tries = 0u; tries < 10u; tries++) {
+        if (BNO055Find() == TRUE) {
+            break;
+        }
+        DelayMs(10u);
+    }
+
+    if (tries == 10u) {
+        imuReady = FALSE;
+#ifdef ROBOT_DEBUG
+        uint8_t chip28 = 0u;
+        uint8_t chip29 = 0u;
+        uint8_t ok28 = BNO055ReadChipIdAt(BNO055_ADDR_LOW, &chip28);
+        uint8_t ok29 = BNO055ReadChipIdAt(BNO055_ADDR_HIGH, &chip29);
+
+        BNO_SDA_TRIS = 1;
+        BNO_SCL_TRIS = 1;
+        I2CDelay();
+        printf("[DEBUG][IMU] BNO055 not found on SDA %s / SCL %s "
+                "(idle SDA=%u SCL=%u, expected 1/1, "
+                "0x28 readOk=%u id=0x%02X, 0x29 readOk=%u id=0x%02X)\r\n",
+                BNO055_SDA_PIN_LABEL, BNO055_SCL_PIN_LABEL,
+                (unsigned int) BNO_SDA_BIT, (unsigned int) BNO_SCL_BIT,
+                (unsigned int) ok28, chip28, (unsigned int) ok29, chip29);
 #endif
         return FALSE;
     }
@@ -183,8 +232,18 @@ uint8_t RobotIMU_BeginNDOF(void)
     if (BNO055Write8(BNO055_OPR_MODE_REG, BNO055_OPERATION_MODE_NDOF) != TRUE) {
         return FALSE;
     }
-    DelayMs(20u);
-    return TRUE;
+    /* BNO055 datasheet: CONFIG→operating-mode transition typical 7ms, max ~30ms.
+     * Use a generous settle then poll to confirm the mode register reflects NDOF
+     * before returning, so callers don't read stale CONFIG-mode zeros. */
+    DelayMs(50u);
+    for (tries = 0u; tries < 20u; tries++) {
+        if ((BNO055Read8(BNO055_OPR_MODE_REG, &chipId) == TRUE) &&
+                (chipId == BNO055_OPERATION_MODE_NDOF)) {
+            return TRUE;
+        }
+        DelayMs(10u);
+    }
+    return FALSE;
 #else
     return TRUE;
 #endif
@@ -232,10 +291,9 @@ void RobotIMU_Update(void)
         return;
     }
 
-    if (elapsedMs == 0u) {
-        return;
-    }
-
+    /* elapsedMs == 0 when ES_Timer_GetTime() is not running (bench/test modes
+     * that never call ES_Initialize()). Always attempt I2C reads regardless;
+     * only skip velocity/position integration when there is no time delta. */
     lastReadOk = TRUE;
 
     if (BNO055ReadLen(BNO055_EULER_H_LSB_REG, buffer, 6u) == TRUE) {
@@ -659,15 +717,35 @@ static void I2CInit(void)
 
 static uint8_t I2CStart(void)
 {
+    uint8_t pulseCount;
+
     BNO_SDA_TRIS = 1;
     BNO_SCL_TRIS = 1;
     if (I2CWaitSclHigh() == FALSE) {
         return FALSE;
     }
     I2CDelay();
+
     if (BNO_SDA_BIT == 0) {
-        return FALSE;
+        /* SDA stuck low — slave is mid-byte. Clock out up to 9 pulses to
+         * complete or abort whatever byte the slave is sending, then issue
+         * a STOP to release it. This mirrors the bus-recovery sequence in
+         * I2CInit() and handles a stuck bus that can survive power-on init
+         * but gets wedged by a failed transaction during NDOF mode switch. */
+        for (pulseCount = 0u; pulseCount < 9u && BNO_SDA_BIT == 0; pulseCount++) {
+            BNO_SCL_TRIS = 0;
+            I2CDelay();
+            BNO_SCL_TRIS = 1;
+            I2CWaitSclHigh();
+            I2CDelay();
+        }
+        I2CStop();
+        I2CDelay();
+        if (BNO_SDA_BIT == 0) {
+            return FALSE;
+        }
     }
+
     BNO_SDA_TRIS = 0;
     I2CDelay();
     BNO_SCL_TRIS = 0;
@@ -696,6 +774,8 @@ static uint8_t I2CStop(void)
     I2CDelay();
     BNO_SCL_TRIS = 1;
     if (I2CWaitSclHigh() == FALSE) {
+        BNO_SDA_TRIS = 1;   /* always release SDA even on SCL timeout so the
+                               master never leaves SDA driven low across calls */
         return FALSE;
     }
     I2CDelay();
@@ -815,16 +895,13 @@ static uint8_t I2CWaitSclHigh(void)
 
 static uint8_t BNO055ProbeAddress(uint8_t address)
 {
-    uint8_t savedAddress = bnoAddress;
     uint8_t chipId = 0;
 
-    bnoAddress = address;
-    if ((BNO055Read8(BNO055_CHIP_ID_REG, &chipId) == TRUE) &&
+    if ((BNO055ReadChipIdAt(address, &chipId) == TRUE) &&
             (chipId == BNO055_CHIP_ID)) {
         return TRUE;
     }
 
-    bnoAddress = savedAddress;
     return FALSE;
 }
 
@@ -837,6 +914,17 @@ static uint8_t BNO055Find(void)
         return TRUE;
     }
     return FALSE;
+}
+
+static uint8_t BNO055ReadChipIdAt(uint8_t address, uint8_t *chipId)
+{
+    uint8_t savedAddress = bnoAddress;
+    uint8_t ok;
+
+    bnoAddress = address;
+    ok = BNO055Read8(BNO055_CHIP_ID_REG, chipId);
+    bnoAddress = savedAddress;
+    return ok;
 }
 
 static uint8_t BNO055Write8(uint8_t reg, uint8_t value)
