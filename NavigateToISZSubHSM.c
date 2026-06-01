@@ -61,7 +61,10 @@ static uint8_t IsTop(void);
 static uint8_t IsBottom(void);
 static uint8_t IsAlignableState(NavigateState_t state);
 static AlignMode_t AlignModeForState(NavigateState_t state);
-static uint8_t IsTapeOffEventType(ES_EventTyp_t eventType);
+static uint8_t TapeChangedHasOffEvent(ES_Event event);
+static uint8_t TapeRising(ES_Event event, uint8_t mask);
+static uint8_t BumpRising(ES_Event event, uint8_t mask);
+static uint8_t BumpFalling(ES_Event event, uint8_t mask);
 static uint8_t TapeAlignNeededNow(void);
 static uint8_t HandleAlignTriggerEvent(ES_Event *event,
         NavigateState_t *nextState, uint8_t *makeTransition);
@@ -113,12 +116,14 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             LatchInitialStrafeYRefOnce();
             break;
-        case TapeSensor2OnEvent:
-            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-            num_tapes_crossed = 0u;
-            nextState = Reverse1State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_2_MASK) == TRUE) {
+                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+                num_tapes_crossed = 0u;
+                nextState = Reverse1State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         case MisalignedEvent:
             BeginAlignForState(CurrentState);
@@ -137,12 +142,14 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             LatchInitialStrafeYRefOnce();
             break;
-        case TapeSensor2OnEvent:
-            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-            num_tapes_crossed = 0u;
-            nextState = Reverse1State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_2_MASK) == TRUE) {
+                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+                num_tapes_crossed = 0u;
+                nextState = Reverse1State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         case MisalignedEvent:
             BeginAlignForState(CurrentState);
@@ -169,15 +176,17 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
-        case BumpSensor3OnEvent:
-        case BumpSensor4OnEvent:
-            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-            nextState = Forward1State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case BumpChangedEvent:
+            if (BumpRising(ThisEvent,
+                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
+                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+                nextState = Forward1State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
-        case TapeSensor3OnEvent:
-            if (IsBottom()) {
+        case TapeChangedEvent:
+            if (IsBottom() && (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE)) {
                 RobotMotion_Stop();
                 RobotIMU_ZeroPositionVelocity();
                 RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, 1,
@@ -185,10 +194,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
                 nextState = Forward2State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
-            }
-            break;
-        case TapeSensor4OnEvent:
-            if (IsTop()) {
+            } else if (IsTop() && (TapeRising(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE)) {
                 RobotMotion_Stop();
                 RobotIMU_ZeroPositionVelocity();
                 RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, 1,
@@ -214,29 +220,32 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         case ES_ENTRY:
             RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             break;
-        case TapeSensor5LowToHighEvent:
-            CountTape5Crossing();
-            if (num_tapes_crossed >= 2u) {
-                boundary_choice = BOUNDARY_BOTTOM;
-                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                nextState = Reverse1State;
-                makeTransition = TRUE;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_5_MASK) == TRUE) {
+                CountTape5Crossing();
+                if (num_tapes_crossed >= 2u) {
+                    boundary_choice = BOUNDARY_BOTTOM;
+                    SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+                    nextState = Reverse1State;
+                    makeTransition = TRUE;
+                }
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
-        case BumpSensor3OnEvent:
-        case BumpSensor4OnEvent:
-            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-            nextState = Forward1State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
-        case BumpSensor1OnEvent:
-        case BumpSensor2OnEvent:
-            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-            nextState = Reverse2State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case BumpChangedEvent:
+            if (BumpRising(ThisEvent,
+                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
+                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+                nextState = Forward1State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else if (BumpRising(ThisEvent,
+                    BUMP_SENSOR_1_MASK | BUMP_SENSOR_2_MASK) == TRUE) {
+                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+                nextState = Reverse2State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         case MisalignedEvent:
             BeginAlignForState(CurrentState);
@@ -254,29 +263,32 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         case ES_ENTRY:
             RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             break;
-        case TapeSensor5LowToHighEvent:
-            CountTape5Crossing();
-            if (num_tapes_crossed >= 2u) {
-                boundary_choice = BOUNDARY_TOP;
-                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                nextState = Reverse1State;
-                makeTransition = TRUE;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_5_MASK) == TRUE) {
+                CountTape5Crossing();
+                if (num_tapes_crossed >= 2u) {
+                    boundary_choice = BOUNDARY_TOP;
+                    SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+                    nextState = Reverse1State;
+                    makeTransition = TRUE;
+                }
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
-        case BumpSensor3OnEvent:
-        case BumpSensor4OnEvent:
-            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-            nextState = Forward1State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
-        case BumpSensor1OnEvent:
-        case BumpSensor2OnEvent:
-            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-            nextState = Reverse2State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case BumpChangedEvent:
+            if (BumpRising(ThisEvent,
+                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
+                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+                nextState = Forward1State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else if (BumpRising(ThisEvent,
+                    BUMP_SENSOR_1_MASK | BUMP_SENSOR_2_MASK) == TRUE) {
+                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+                nextState = Reverse2State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         case MisalignedEvent:
             BeginAlignForState(CurrentState);
@@ -294,13 +306,15 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         case ES_ENTRY:
             RobotMotion_Forward(MOTOR_SPEED_IPS);
             break;
-        case BumpSensor3OffEvent:
-        case BumpSensor4OffEvent:
-            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-            StartTapeCounting();
-            nextState = IsTop() ? StrafeRight1State : StrafeLeft1State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case BumpChangedEvent:
+            if (BumpFalling(ThisEvent,
+                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
+                SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+                StartTapeCounting();
+                nextState = IsTop() ? StrafeRight1State : StrafeLeft1State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         case MisalignedEvent:
             BeginAlignForState(CurrentState);
@@ -318,13 +332,15 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         case ES_ENTRY:
             RobotMotion_Reverse(MOTOR_SPEED_IPS);
             break;
-        case BumpSensor1OffEvent:
-        case BumpSensor2OffEvent:
-            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-            StartTapeCounting();
-            nextState = IsBottom() ? StrafeLeft1State : StrafeRight1State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case BumpChangedEvent:
+            if (BumpFalling(ThisEvent,
+                    BUMP_SENSOR_1_MASK | BUMP_SENSOR_2_MASK) == TRUE) {
+                SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+                StartTapeCounting();
+                nextState = IsBottom() ? StrafeLeft1State : StrafeRight1State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         case MisalignedEvent:
             BeginAlignForState(CurrentState);
@@ -388,14 +404,16 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         case ES_ENTRY:
             RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             break;
-        case TapeSensor1OnEvent:
-            RobotMotion_Stop();
-            RobotIMU_ZeroPositionVelocity();
-            RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, -1,
-                    DISTANCE_REVERSE_TO_SHOOT_IN, MOTOR_SPEED_IPS);
-            nextState = Reverse3State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_1_MASK) == TRUE) {
+                RobotMotion_Stop();
+                RobotIMU_ZeroPositionVelocity();
+                RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, -1,
+                        DISTANCE_REVERSE_TO_SHOOT_IN, MOTOR_SPEED_IPS);
+                nextState = Reverse3State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         case MisalignedEvent:
             BeginAlignForState(CurrentState);
@@ -413,14 +431,16 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         case ES_ENTRY:
             RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             break;
-        case TapeSensor1OnEvent:
-            RobotMotion_Stop();
-            RobotIMU_ZeroPositionVelocity();
-            RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, -1,
-                    DISTANCE_REVERSE_TO_SHOOT_IN, MOTOR_SPEED_IPS);
-            nextState = Reverse3State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_1_MASK) == TRUE) {
+                RobotMotion_Stop();
+                RobotIMU_ZeroPositionVelocity();
+                RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, -1,
+                        DISTANCE_REVERSE_TO_SHOOT_IN, MOTOR_SPEED_IPS);
+                nextState = Reverse3State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         case MisalignedEvent:
             BeginAlignForState(CurrentState);
@@ -602,18 +622,56 @@ static AlignMode_t AlignModeForState(NavigateState_t state)
     }
 }
 
-static uint8_t IsTapeOffEventType(ES_EventTyp_t eventType)
+static uint8_t TapeChangedHasOffEvent(ES_Event event)
 {
-    switch (eventType) {
-    case TapeSensor1OffEvent:
-    case TapeSensor2OffEvent:
-    case TapeSensor3OffEvent:
-    case TapeSensor4OffEvent:
-    case TapeSensor5OffEvent:
-        return TRUE;
-    default:
+    uint8_t currentMask;
+    uint8_t changedMask;
+
+    if (event.EventType != TapeChangedEvent) {
         return FALSE;
     }
+    currentMask = TAPE_EVENT_CURRENT_MASK(event.EventParam);
+    changedMask = TAPE_EVENT_CHANGED_MASK(event.EventParam);
+    return ((changedMask & (uint8_t) ~currentMask) != 0u) ? TRUE : FALSE;
+}
+
+static uint8_t TapeRising(ES_Event event, uint8_t mask)
+{
+    uint8_t currentMask;
+    uint8_t changedMask;
+
+    if (event.EventType != TapeChangedEvent) {
+        return FALSE;
+    }
+    currentMask = TAPE_EVENT_CURRENT_MASK(event.EventParam);
+    changedMask = TAPE_EVENT_CHANGED_MASK(event.EventParam);
+    return ((currentMask & changedMask & mask) != 0u) ? TRUE : FALSE;
+}
+
+static uint8_t BumpRising(ES_Event event, uint8_t mask)
+{
+    uint8_t currentMask;
+    uint8_t changedMask;
+
+    if (event.EventType != BumpChangedEvent) {
+        return FALSE;
+    }
+    currentMask = BUMP_EVENT_CURRENT_MASK(event.EventParam);
+    changedMask = BUMP_EVENT_CHANGED_MASK(event.EventParam);
+    return ((currentMask & changedMask & mask) != 0u) ? TRUE : FALSE;
+}
+
+static uint8_t BumpFalling(ES_Event event, uint8_t mask)
+{
+    uint8_t currentMask;
+    uint8_t changedMask;
+
+    if (event.EventType != BumpChangedEvent) {
+        return FALSE;
+    }
+    currentMask = BUMP_EVENT_CURRENT_MASK(event.EventParam);
+    changedMask = BUMP_EVENT_CHANGED_MASK(event.EventParam);
+    return ((changedMask & (uint8_t) ~currentMask & mask) != 0u) ? TRUE : FALSE;
 }
 
 static uint8_t HandleAlignTriggerEvent(ES_Event *event,
@@ -643,7 +701,7 @@ static uint8_t HandleAlignTriggerEvent(ES_Event *event,
             event->EventType = ES_NO_EVENT;
             return TRUE;
         }
-        if (IsTapeOffEventType(event->EventType) == TRUE) {
+        if (TapeChangedHasOffEvent(*event) == TRUE) {
             BeginAlignForState(CurrentState);
             *nextState = AlignState;
             *makeTransition = TRUE;

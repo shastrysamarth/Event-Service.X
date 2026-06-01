@@ -23,6 +23,28 @@
 static uint8_t CommandUsesStrafeSpeed(const char *commandName);
 static float MotorCommandSpeedIPS(const char *commandName, float normalSpeedIPS);
 static unsigned int MotorDutyForSpeed(float speedIPS);
+static void LogMotorControlChange(void);
+
+/* Tracks the last drive control we logged so we only print on a real change.
+ * RobotMotion stores command/pivot as stable string literals, so comparing
+ * pointers is enough to detect a transition. */
+static const char *prevMotorControl = "Init";
+static const char *prevMotorPivot = "none";
+
+static void LogMotorControlChange(void)
+{
+    const char *control = RobotMotion_GetCommandName();
+    const char *pivot = RobotMotion_GetPivotName();
+
+    if ((control == prevMotorControl) && (pivot == prevMotorPivot)) {
+        return;
+    }
+
+    printf("[MOTOR] control change: %s/%s -> %s/%s\r\n",
+            prevMotorControl, prevMotorPivot, control, pivot);
+    prevMotorControl = control;
+    prevMotorPivot = pivot;
+}
 
 static uint8_t CommandUsesStrafeSpeed(const char *commandName)
 {
@@ -62,7 +84,8 @@ static unsigned int MotorDutyForSpeed(float speedIPS)
 #endif
 
 #ifdef ROBOT_MOTOR_SENSOR_TEST
-#define BENCH_SENSOR_PERIOD_MS 250u
+/* 0 = print on every loop pass so the stream shows the raw sampling rate. */
+#define BENCH_SENSOR_PERIOD_MS 0u
 #define STEPPER_BENCH_BURST_STEPS 20u
 
 typedef enum {
@@ -113,6 +136,7 @@ static float benchMotorSpeedIPS = MOTOR_BENCH_SPEED_IPS;
 static uint8_t benchMotorSequenceStep = 0u;
 static uint16_t activeSensorMask = 0u;
 static char activeDriveCommandKey = '\0';
+static uint32_t benchSampleSeq = 0u;
 
 
 void RobotTestHarness_RunMotorSensorBench(void)
@@ -129,6 +153,7 @@ void RobotTestHarness_RunMotorSensorBench(void)
 
     for (;;) {
         unsigned int now;
+        uint8_t printNow;
 
         if (!IsReceiveEmpty()) {
             char key = GetChar();
@@ -138,10 +163,20 @@ void RobotTestHarness_RunMotorSensorBench(void)
             }
         }
 
+        LogMotorControlChange();
+
         now = TIMERS_GetTime();
 
-        if ((activeSensorMask != 0u) &&
-                ((unsigned int) (now - lastSensorPrintTime) >= BENCH_SENSOR_PERIOD_MS)) {
+#if BENCH_SENSOR_PERIOD_MS == 0u
+        /* Stream on every pass so the print rate tracks the sampling rate. */
+        printNow = TRUE;
+        (void) lastSensorPrintTime;
+#else
+        printNow = ((unsigned int) (now - lastSensorPrintTime) >=
+                BENCH_SENSOR_PERIOD_MS) ? TRUE : FALSE;
+#endif
+
+        if ((activeSensorMask != 0u) && (printNow == TRUE)) {
             BenchPrintActiveSensors();
             lastSensorPrintTime = now;
         }
@@ -152,6 +187,7 @@ static void BenchPrintHelp(void)
 {
     printf("\r\n[BENCH] Direct motor/sensor harness, no HSM\r\n");
     printf("[BENCH] no sensor streaming at startup\r\n");
+    printf("[BENCH] enabled streams print every loop pass (n=seq) to show read rate\r\n");
     printf("[BENCH] ? help, ! hardware pin map, . print active sensors once\r\n");
     printf("[IMU] I print one BNO055/gyro snapshot\r\n");
     printf("[SENSOR] toggle streams: t/y/u/i/o tape 1/2/3/4/5\r\n");
@@ -522,17 +558,34 @@ static void BenchRunMotorSequenceStep(void)
 
 static void BenchPrintActiveSensors(void)
 {
+    static uint32_t lastRateTime = 0u;
+    static uint32_t samplesSinceRate = 0u;
     uint8_t sensor;
+    unsigned int now;
 
     if (activeSensorMask == 0u) {
         printf("[SENSOR] no active streams\r\n");
         return;
     }
 
+    benchSampleSeq++;
+    samplesSinceRate++;
+
     for (sensor = 1u; sensor < BENCH_SENSOR_COUNT; sensor++) {
         if (activeSensorMask & BENCH_SENSOR_MASK(sensor)) {
             BenchPrintSensor((BenchSensor_t) sensor);
         }
+    }
+
+    /* Report measured read rate roughly once a second so the operator can see
+     * how fast the bench is actually sampling each enabled sensor. */
+    now = TIMERS_GetTime();
+    if ((uint32_t) (now - lastRateTime) >= 1000u) {
+        printf("[BENCH] read rate=%lu samples/s (seq=%lu)\r\n",
+                (unsigned long) samplesSinceRate,
+                (unsigned long) benchSampleSeq);
+        samplesSinceRate = 0u;
+        lastRateTime = now;
     }
 }
 
@@ -576,7 +629,8 @@ static void BenchPrintSensor(BenchSensor_t sensor)
 
 static void BenchPrintTape(TapeSensor_t sensor, const char *name, const char *pinLabel)
 {
-    printf("[SENSOR] %s raw=%u onTape=%u pin=%s\r\n", name,
+    printf("[SENSOR] n=%lu %s raw=%u onTape=%u pin=%s\r\n",
+            (unsigned long) benchSampleSeq, name,
             (unsigned int) RobotSensors_ReadTapeDigital(sensor),
             (unsigned int) RobotSensors_IsTapeOn(sensor),
             pinLabel);
@@ -584,7 +638,8 @@ static void BenchPrintTape(TapeSensor_t sensor, const char *name, const char *pi
 
 static void BenchPrintBump(BumpSensor_t sensor, const char *name, const char *pinLabel)
 {
-    printf("[SENSOR] %s raw=%u bumped=%u pin=%s\r\n", name,
+    printf("[SENSOR] n=%lu %s raw=%u bumped=%u pin=%s\r\n",
+            (unsigned long) benchSampleSeq, name,
             (unsigned int) RobotSensors_ReadBumpDigital(sensor),
             (unsigned int) RobotSensors_IsBumpOn(sensor),
             pinLabel);
@@ -595,7 +650,8 @@ static void BenchPrintBeacon(void)
     uint16_t rawADC = RobotSensors_ReadBeaconRawADC();
     uint16_t smoothADC = RobotSensors_GetBeaconADC();
 
-    printf("[SENSOR] beacon rawADC=%u smoothADC=%u distance=%u ft pin=%s\r\n",
+    printf("[SENSOR] n=%lu beacon rawADC=%u smoothADC=%u distance=%u ft pin=%s\r\n",
+            (unsigned long) benchSampleSeq,
             (unsigned int) rawADC,
             (unsigned int) smoothADC,
             (unsigned int) RobotSensors_BeaconDistanceFeetFromADC(smoothADC),
@@ -823,6 +879,8 @@ uint8_t RobotTestHarness_CheckKeyboard(void)
 {
     char key;
     ES_EventTyp_t eventType;
+
+    LogMotorControlChange();
 
     if (IsReceiveEmpty()) {
         return FALSE;
@@ -1166,40 +1224,11 @@ static uint16_t GetDefaultParamForEvent(ES_EventTyp_t eventType)
         return 100u;
     case MaxSignalFoundEvent:
         return 512u;
-    case TapeSensor1OnEvent:
-    case TapeSensor1OffEvent:
-        return 1u;
-    case TapeSensor2OnEvent:
-    case TapeSensor2OffEvent:
-        return 2u;
-    case TapeSensor3OnEvent:
-    case TapeSensor3OffEvent:
-        return 3u;
-    case TapeSensor4OnEvent:
-    case TapeSensor4OffEvent:
-        return 4u;
-    case TapeSensor5OnEvent:
-    case TapeSensor5OffEvent:
-    case TapeSensor5LowToHighEvent:
-        return 5u;
-    case TapeSensor1And2OffEvent:
-        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
-                ~(TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK));
-    case TapeSensor1And5OffEvent:
-        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
-                ~(TAPE_SENSOR_1_MASK | TAPE_SENSOR_5_MASK));
-    case TapeSensor2And5OffEvent:
-        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
-                ~(TAPE_SENSOR_2_MASK | TAPE_SENSOR_5_MASK));
-    case TapeSensor3And4OffEvent:
-        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
-                ~(TAPE_SENSOR_3_MASK | TAPE_SENSOR_4_MASK));
-    case TapeSensor3And5OffEvent:
-        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
-                ~(TAPE_SENSOR_3_MASK | TAPE_SENSOR_5_MASK));
-    case TapeSensor4And5OffEvent:
-        return (uint16_t) (TAPE_SENSOR_ALL_MASK &
-                ~(TAPE_SENSOR_4_MASK | TAPE_SENSOR_5_MASK));
+    case TapeChangedEvent:
+        return TAPE_EVENT_MAKE_PARAM(TAPE_SENSOR_1_MASK | TAPE_SENSOR_5_MASK,
+                TAPE_SENSOR_1_MASK | TAPE_SENSOR_5_MASK);
+    case BumpChangedEvent:
+        return BUMP_EVENT_MAKE_PARAM(BUMP_SENSOR_3_MASK, BUMP_SENSOR_3_MASK);
     case Solenoid1OnEvent:
         return 1u;
     case Solenoid2OnEvent:
@@ -1212,18 +1241,6 @@ static uint16_t GetDefaultParamForEvent(ES_EventTyp_t eventType)
         return 5u;
     case Solenoid6OnEvent:
         return 6u;
-    case BumpSensor1OnEvent:
-    case BumpSensor1OffEvent:
-        return 1u;
-    case BumpSensor2OnEvent:
-    case BumpSensor2OffEvent:
-        return 2u;
-    case BumpSensor3OnEvent:
-    case BumpSensor3OffEvent:
-        return 3u;
-    case BumpSensor4OnEvent:
-    case BumpSensor4OffEvent:
-        return 4u;
     case RealignedEvent:
     case PositionRealignedEvent:
         return ALIGN_REALIGNED_SOURCE_MANUAL;

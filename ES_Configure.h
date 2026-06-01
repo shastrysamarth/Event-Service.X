@@ -27,51 +27,29 @@ typedef enum {
     /* key 'a' */ BeaconADCIncreaseEvent,
     /* key 'b' */ MaxSignalFoundEvent,
 
-    /* key 'c' */ TapeSensor1OnEvent,
-    /* key 'd' */ TapeSensor1OffEvent,
-    /* key 'e' */ TapeSensor2OnEvent,
-    /* key 'f' */ TapeSensor2OffEvent,
-    /* key 'g' */ TapeSensor3OnEvent,
-    /* key 'h' */ TapeSensor3OffEvent,
-    /* key 'i' */ TapeSensor4OnEvent,
-    /* key 'j' */ TapeSensor4OffEvent,
-    /* key 'k' */ TapeSensor5OnEvent,
-    /* key 'l' */ TapeSensor5OffEvent,
-    /* key 'm' */ TapeSensor5LowToHighEvent,
+    /* Masked sensor events. EventParam packs a current mask plus a changed mask
+     * (see TAPE_EVENT_* / BUMP_EVENT_* in RobotPins.h). These replace the
+     * deprecated per-sensor On/Off/combo tape and bump events. */
+    /* key 'c' */ TapeChangedEvent,
+    /* key 'd' */ BumpChangedEvent,
 
-    /* key 'n' */ TapeSensor1And2OffEvent,
-    /* key 'o' */ TapeSensor1And5OffEvent,
-    /* key 'p' */ TapeSensor2And5OffEvent,
-    /* key 'q' */ TapeSensor3And4OffEvent,
-    /* key 'r' */ TapeSensor3And5OffEvent,
-    /* key 's' */ TapeSensor4And5OffEvent,
+    /* key 'e' */ Solenoid1OnEvent,
+    /* key 'f' */ Solenoid2OnEvent,
+    /* key 'g' */ Solenoid3OnEvent,
+    /* key 'h' */ Solenoid4OnEvent,
+    /* key 'i' */ Solenoid5OnEvent,
+    /* key 'j' */ Solenoid6OnEvent,
 
-    /* key 't' */ Solenoid1OnEvent,
-    /* key 'u' */ Solenoid2OnEvent,
-    /* key 'v' */ Solenoid3OnEvent,
-    /* key 'w' */ Solenoid4OnEvent,
-    /* key 'x' */ Solenoid5OnEvent,
-    /* key 'y' */ Solenoid6OnEvent,
+    /* key 'k' */ MisalignedEvent,
+    /* key 'l' */ PositionRealignedEvent, /* DEPRECATED: position-align removed; retained for harness / legacy. */
+    /* key 'm' */ RealignedEvent,
+    /* key 'n' */ DistanceMoveCompleteEvent,
 
-    /* key 'z' */ BumpSensor1OnEvent,
-    /* key 'A' */ BumpSensor1OffEvent,
-    /* key 'B' */ BumpSensor2OnEvent,
-    /* key 'C' */ BumpSensor2OffEvent,
-    /* key 'D' */ BumpSensor3OnEvent,
-    /* key 'E' */ BumpSensor3OffEvent,
-    /* key 'F' */ BumpSensor4OnEvent,
-    /* key 'G' */ BumpSensor4OffEvent,
-
-    /* key 'H' */ MisalignedEvent,
-    /* key 'I' */ PositionRealignedEvent, /* DEPRECATED: position-align removed; retained for harness / legacy. */
-    /* key 'J' */ RealignedEvent,
-    /* key 'K' */ DistanceMoveCompleteEvent,
-
-    /* key 'L' */ FoundFrontTapeEvent,
-    /* key 'M' */ ReachedISZEvent,
-    /* key 'N' */ InsideISZEvent,
-    /* key 'O' */ SetEvent,
-    /* key 'P' */ DoneEvent,
+    /* key 'o' */ FoundFrontTapeEvent,
+    /* key 'p' */ ReachedISZEvent,
+    /* key 'q' */ InsideISZEvent,
+    /* key 'r' */ SetEvent,
+    /* key 's' */ DoneEvent,
 
     NUMBEROFEVENTS,
 } ES_EventTyp_t;

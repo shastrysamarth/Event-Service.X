@@ -22,6 +22,8 @@ static void RobotSensors_InitSampler(void);
 
 static volatile uint8_t sampledTapeRaw[5];
 static volatile uint8_t sampledTapeOn[5];
+static volatile uint8_t sampledBumpRaw[4];
+static volatile uint8_t sampledBumpOn[4];
 static volatile uint16_t beaconSamples[BEACON_AVERAGE_SAMPLE_COUNT];
 static volatile uint32_t beaconSampleSum = 0u;
 static volatile uint8_t beaconSampleIndex = 0u;
@@ -159,6 +161,22 @@ uint8_t RobotSensors_ReadBumpDigital(BumpSensor_t sensor)
     return (IO_PortsReadPort(port) & pin) ? 1u : 0u;
 }
 
+uint8_t RobotSensors_GetBumpDigital(BumpSensor_t sensor)
+{
+#if ROBOT_PLUGPLAY_USE_ANY_BUMP
+    if (RobotPlugPlay_IsBumpEnabled((uint8_t) sensor) == FALSE) {
+        return 0u;
+    }
+    if ((sensor < BUMP_SENSOR_1) || (sensor > BUMP_SENSOR_4)) {
+        return 0u;
+    }
+    return sampledBumpRaw[(uint8_t) sensor - 1u];
+#else
+    (void)sensor;
+    return 0u;
+#endif
+}
+
 uint16_t RobotSensors_ReadShooterMotorADC(void)
 {
 #if ROBOT_PLUGPLAY_USE_SHOOTER_ADC
@@ -225,13 +243,18 @@ uint8_t RobotSensors_IsSolenoidOn(SolenoidSensor_t sensor)
 
 uint8_t RobotSensors_IsBumpOn(BumpSensor_t sensor)
 {
-    uint8_t reading;
-
+#if ROBOT_PLUGPLAY_USE_ANY_BUMP
     if (RobotPlugPlay_IsBumpEnabled((uint8_t) sensor) == FALSE) {
         return FALSE;
     }
-    reading = RobotSensors_ReadBumpDigital(sensor);
-    return RobotSensors_BumpRawIsOn(reading);
+    if ((sensor < BUMP_SENSOR_1) || (sensor > BUMP_SENSOR_4)) {
+        return FALSE;
+    }
+    return sampledBumpOn[(uint8_t) sensor - 1u];
+#else
+    (void)sensor;
+    return FALSE;
+#endif
 }
 
 uint8_t RobotSensors_BumpRawIsOn(uint8_t rawReading)
@@ -362,10 +385,12 @@ static void RobotSensors_InitSampler(void)
 
 static void RobotSensors_SampleNow(void)
 {
-#if ROBOT_PLUGPLAY_USE_ANY_TAPE
+#if ROBOT_PLUGPLAY_USE_ANY_TAPE || ROBOT_PLUGPLAY_USE_ANY_BUMP
     uint8_t i;
     uint8_t raw;
+#endif
 
+#if ROBOT_PLUGPLAY_USE_ANY_TAPE
     for (i = 0u; i < 5u; i++) {
         if (RobotPlugPlay_IsTapeEnabled(i + 1u) == FALSE) {
             sampledTapeRaw[i] = 0u;
@@ -375,6 +400,19 @@ static void RobotSensors_SampleNow(void)
         raw = RobotSensors_ReadTapeDigital((TapeSensor_t)(i + 1u));
         sampledTapeRaw[i] = raw;
         sampledTapeOn[i] = RobotSensors_TapeRawIsOn((TapeSensor_t)(i + 1u), raw);
+    }
+#endif
+
+#if ROBOT_PLUGPLAY_USE_ANY_BUMP
+    for (i = 0u; i < 4u; i++) {
+        if (RobotPlugPlay_IsBumpEnabled(i + 1u) == FALSE) {
+            sampledBumpRaw[i] = 0u;
+            sampledBumpOn[i] = FALSE;
+            continue;
+        }
+        raw = RobotSensors_ReadBumpDigital((BumpSensor_t)(i + 1u));
+        sampledBumpRaw[i] = raw;
+        sampledBumpOn[i] = RobotSensors_BumpRawIsOn(raw);
     }
 #endif
 

@@ -6,6 +6,7 @@
 #include "RobotHSM.h"
 #include "RobotIMU.h"
 #include "RobotMotion.h"
+#include "RobotEventCheckers.h"
 #include "RobotPlugPlay.h"
 #include "RobotSensors.h"
 #include "RobotStepper.h"
@@ -29,37 +30,14 @@ const char * const EventNames[] = {
     "ES_TIMERSTOPPED",
     "BeaconADCIncreaseEvent",
     "MaxSignalFoundEvent",
-    "TapeSensor1OnEvent",
-    "TapeSensor1OffEvent",
-    "TapeSensor2OnEvent",
-    "TapeSensor2OffEvent",
-    "TapeSensor3OnEvent",
-    "TapeSensor3OffEvent",
-    "TapeSensor4OnEvent",
-    "TapeSensor4OffEvent",
-    "TapeSensor5OnEvent",
-    "TapeSensor5OffEvent",
-    "TapeSensor5LowToHighEvent",
-    "TapeSensor1And2OffEvent",
-    "TapeSensor1And5OffEvent",
-    "TapeSensor2And5OffEvent",
-    "TapeSensor3And4OffEvent",
-    "TapeSensor3And5OffEvent",
-    "TapeSensor4And5OffEvent",
+    "TapeChangedEvent",
+    "BumpChangedEvent",
     "Solenoid1OnEvent",
     "Solenoid2OnEvent",
     "Solenoid3OnEvent",
     "Solenoid4OnEvent",
     "Solenoid5OnEvent",
     "Solenoid6OnEvent",
-    "BumpSensor1OnEvent",
-    "BumpSensor1OffEvent",
-    "BumpSensor2OnEvent",
-    "BumpSensor2OffEvent",
-    "BumpSensor3OnEvent",
-    "BumpSensor3OffEvent",
-    "BumpSensor4OnEvent",
-    "BumpSensor4OffEvent",
     "MisalignedEvent",
     "PositionRealignedEvent",
     "RealignedEvent",
@@ -152,6 +130,25 @@ void RobotDebug_PrintModuleVariables(void)
                 (unsigned int) beaconSmooth,
                 (unsigned int) RobotSensors_BeaconDistanceFeetFromADC(beaconSmooth));
     }
+    {
+        uint8_t tapeMask = 0u;
+        uint8_t bumpMask = 0u;
+        uint8_t s;
+
+        for (s = 1u; s <= 5u; s++) {
+            if (RobotSensors_IsTapeOn((TapeSensor_t) s) == TRUE) {
+                tapeMask |= (uint8_t) (1u << (s - 1u));
+            }
+        }
+        for (s = 1u; s <= 4u; s++) {
+            if (RobotSensors_IsBumpOn((BumpSensor_t) s) == TRUE) {
+                bumpMask |= (uint8_t) (1u << (s - 1u));
+            }
+        }
+        printf("[VAR] Tape.mask=0x%02X (bit0=s1..bit4=s5) Bump.mask=0x%02X (bit0=FR,1=FL,2=RR,3=RL)\r\n",
+                (unsigned int) tapeMask,
+                (unsigned int) bumpMask);
+    }
     printf("[VAR] BNO055.enabled=%u ready=%u calibrated=%u\r\n",
             (unsigned int) ROBOT_PLUGPLAY_USE_BNO055,
             (unsigned int) imuReady,
@@ -167,6 +164,9 @@ void RobotDebug_PrintModuleVariables(void)
     PrintFixedValue("[VAR] IMU.xVelocity", RobotIMU_GetXVelocityIPS(), "in/s");
     PrintFixedValue("[VAR] IMU.yVelocity", RobotIMU_GetYVelocityIPS(), "in/s");
     PrintFixedValue("[VAR] IMU.headingGyro", RobotIMU_GetZGyroDPS(), "dps");
+    printf("[VAR] EventQueue.maxDepth=%u postFailures=%u\r\n",
+            (unsigned int) RobotEventCheckers_GetRobotQueueMaxDepth(),
+            (unsigned int) RobotEventCheckers_GetRobotQueuePostFailures());
     printf("[VAR] Motion.distanceMoveActive=%u axis=%s direction=%d\r\n",
             (unsigned int) RobotMotion_IsDistanceMoveActive(),
             DistanceAxisName(RobotMotion_GetDistanceAxis()),

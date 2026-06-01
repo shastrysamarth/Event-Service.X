@@ -29,6 +29,9 @@ DistanceAxis_t RobotMotion_GetDistanceAxis(void);
 int8_t RobotMotion_GetDistanceDirection(void);
 /* DEPRECATED name: target inches; used only for debug display (completion is timed). */
 float RobotMotion_GetDistanceTargetInches(void);
+/* Current drive control + pivot as stable string literals (pointer-comparable). */
+const char *RobotMotion_GetCommandName(void);
+const char *RobotMotion_GetPivotName(void);
 void RobotMotion_DebugPrintCurrentCommand(const char *context);
 
 #endif /* ROBOT_MOTION_H */

@@ -84,15 +84,23 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
             RobotStepper_Disable();
             DriveBeaconSearchStrafe();
             break;
-        case TapeSensor3OnEvent:
-            strafeRight = TRUE;
-            DriveBeaconSearchStrafe();
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
-        case TapeSensor4OnEvent:
-            strafeRight = FALSE;
-            DriveBeaconSearchStrafe();
-            ThisEvent.EventType = ES_NO_EVENT;
+        case TapeChangedEvent:
+            if (((TAPE_EVENT_CHANGED_MASK(ThisEvent.EventParam) &
+                    TAPE_SENSOR_3_MASK) != 0u) &&
+                    ((TAPE_EVENT_CURRENT_MASK(ThisEvent.EventParam) &
+                    TAPE_SENSOR_3_MASK) != 0u)) {
+                strafeRight = TRUE;
+                DriveBeaconSearchStrafe();
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            if (((TAPE_EVENT_CHANGED_MASK(ThisEvent.EventParam) &
+                    TAPE_SENSOR_4_MASK) != 0u) &&
+                    ((TAPE_EVENT_CURRENT_MASK(ThisEvent.EventParam) &
+                    TAPE_SENSOR_4_MASK) != 0u)) {
+                strafeRight = FALSE;
+                DriveBeaconSearchStrafe();
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         case MisalignedEvent:
             RobotMotion_Stop();

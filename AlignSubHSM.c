@@ -23,7 +23,6 @@ typedef enum {
 } AlignState_t;
 
 typedef struct {
-    ES_EventTyp_t comboEvent;
     uint8_t sensorA;
     uint8_t sensorB;
     uint8_t pivotSensor;
@@ -41,15 +40,15 @@ static const char *StateNames[] = {
 };
 
 static const TapeAlignBranch_t VerticalBranches[] = {
-    {TapeSensor1And2OffEvent, 1u, 2u, 5u, TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK},
-    {TapeSensor1And5OffEvent, 1u, 5u, 2u, TAPE_SENSOR_5_MASK},
-    {TapeSensor2And5OffEvent, 2u, 5u, 1u, TAPE_SENSOR_5_MASK},
+    {1u, 2u, 5u, TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK},
+    {1u, 5u, 2u, TAPE_SENSOR_5_MASK},
+    {2u, 5u, 1u, TAPE_SENSOR_5_MASK},
 };
 
 static const TapeAlignBranch_t HorizontalBranches[] = {
-    {TapeSensor3And4OffEvent, 3u, 4u, 5u, TAPE_SENSOR_3_MASK | TAPE_SENSOR_4_MASK},
-    {TapeSensor3And5OffEvent, 3u, 5u, 4u, TAPE_SENSOR_5_MASK},
-    {TapeSensor4And5OffEvent, 4u, 5u, 3u, TAPE_SENSOR_5_MASK},
+    {3u, 4u, 5u, TAPE_SENSOR_3_MASK | TAPE_SENSOR_4_MASK},
+    {3u, 5u, 4u, TAPE_SENSOR_5_MASK},
+    {4u, 5u, 3u, TAPE_SENSOR_5_MASK},
 };
 
 static AlignState_t CurrentState = InitPAlignState;
@@ -60,7 +59,7 @@ static float yRef = 0.0f;
 static uint8_t headingAlignedSamples = 0u;
 static uint8_t tapeOffFlags = 0u;
 static TapeAlignBranch_t activeTapeBranch = {
-    TapeSensor1And2OffEvent, 1u, 2u, 5u,
+    1u, 2u, 5u,
     TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK
 };
 
@@ -69,23 +68,17 @@ static uint8_t InitAlignCommon(AlignMode_t mode, MovementAxis_t axis,
 static float AbsFloat(float value);
 static uint8_t StableCheck(uint8_t inThreshold, uint8_t *sampleCounter);
 static uint8_t TapeMaskForSensor(uint8_t sensorNumber);
-static uint8_t TapeStateMask(void);
 static uint8_t TapeOffMaskForBranch(const TapeAlignBranch_t *branch);
 static const TapeAlignBranch_t *SelectReadyTapeBranch(void);
-static const TapeAlignBranch_t *FindTapeBranchForEvent(ES_EventTyp_t eventType);
 static uint8_t StartTapeBranch(const TapeAlignBranch_t *branch,
         AlignState_t *nextState);
 static AlignState_t TapeTurnStateForHeading(void);
 static void RefreshTapeOffFlagsFromHardware(void);
-static uint8_t UpdateTapeFlagsFromEvent(ES_EventTyp_t eventType);
-static uint8_t SensorFromTapeEvent(ES_EventTyp_t eventType, uint8_t *sensorNumber);
-static uint8_t IsTapeOnEvent(ES_EventTyp_t eventType);
-static uint8_t IsTapeOffEvent(ES_EventTyp_t eventType);
-static uint8_t IsTapeComboEvent(ES_EventTyp_t eventType);
+static uint8_t UpdateTapeFlagsFromChangedMask(uint8_t currentMask,
+        uint8_t changedMask);
 static uint8_t CompleteIfRealignedTapeOn(ES_Event *event);
 static TurnPivot_t PivotForTapeSensor(uint8_t sensorNumber);
 static void DriveTapeTurn(uint8_t turnLeft);
-static void PostTapeComboEvent(const TapeAlignBranch_t *branch);
 static void PrintFixedDeg(float value);
 
 uint8_t InitAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches)
@@ -145,23 +138,21 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
             RefreshTapeOffFlagsFromHardware();
             branch = SelectReadyTapeBranch();
             if (branch != (const TapeAlignBranch_t *) 0) {
-                PostTapeComboEvent(branch);
+                makeTransition = StartTapeBranch(branch, &nextState);
             }
             break;
-        default:
-            if (IsTapeComboEvent(ThisEvent.EventType) == TRUE) {
-                branch = FindTapeBranchForEvent(ThisEvent.EventType);
-                if (branch != (const TapeAlignBranch_t *) 0) {
-                    makeTransition = StartTapeBranch(branch, &nextState);
-                    ThisEvent.EventType = ES_NO_EVENT;
-                }
-            } else if (UpdateTapeFlagsFromEvent(ThisEvent.EventType) == TRUE) {
+        case TapeChangedEvent:
+            if (UpdateTapeFlagsFromChangedMask(
+                    TAPE_EVENT_CURRENT_MASK(ThisEvent.EventParam),
+                    TAPE_EVENT_CHANGED_MASK(ThisEvent.EventParam)) == TRUE) {
                 branch = SelectReadyTapeBranch();
                 if (branch != (const TapeAlignBranch_t *) 0) {
-                    PostTapeComboEvent(branch);
+                    makeTransition = StartTapeBranch(branch, &nextState);
                 }
-                ThisEvent.EventType = ES_NO_EVENT;
             }
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        default:
             break;
         }
         break;
@@ -178,13 +169,10 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
             ThisEvent.EventType = RealignedEvent;
             break;
         default:
-            if (CompleteIfRealignedTapeOn(&ThisEvent) == TRUE) {
-                /* CompleteIfRealignedTapeOn sets ThisEvent to RealignedEvent. */
-            } else if ((IsTapeOnEvent(ThisEvent.EventType) == TRUE) ||
-                    (IsTapeOffEvent(ThisEvent.EventType) == TRUE)) {
-                UpdateTapeFlagsFromEvent(ThisEvent.EventType);
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
+            /* CompleteIfRealignedTapeOn consumes TapeChangedEvent: it updates
+             * the off-flags and either completes (RealignedEvent) or clears the
+             * event. Non-tape events pass through unchanged. */
+            (void) CompleteIfRealignedTapeOn(&ThisEvent);
             break;
         }
         break;
@@ -207,13 +195,7 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
             ThisEvent.EventType = RealignedEvent;
             break;
         default:
-            if (CompleteIfRealignedTapeOn(&ThisEvent) == TRUE) {
-                /* CompleteIfRealignedTapeOn sets ThisEvent to RealignedEvent. */
-            } else if ((IsTapeOnEvent(ThisEvent.EventType) == TRUE) ||
-                    (IsTapeOffEvent(ThisEvent.EventType) == TRUE)) {
-                UpdateTapeFlagsFromEvent(ThisEvent.EventType);
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
+            (void) CompleteIfRealignedTapeOn(&ThisEvent);
             break;
         }
         break;
@@ -377,19 +359,6 @@ static uint8_t TapeMaskForSensor(uint8_t sensorNumber)
     return (uint8_t) (1u << (sensorNumber - 1u));
 }
 
-static uint8_t TapeStateMask(void)
-{
-    uint8_t mask = 0u;
-    uint8_t sensor;
-
-    for (sensor = 1u; sensor <= 5u; sensor++) {
-        if (RobotSensors_IsTapeOn((TapeSensor_t) sensor) == TRUE) {
-            mask |= TapeMaskForSensor(sensor);
-        }
-    }
-    return mask;
-}
-
 static uint8_t TapeOffMaskForBranch(const TapeAlignBranch_t *branch)
 {
     return (uint8_t) (TapeMaskForSensor(branch->sensorA) |
@@ -420,24 +389,6 @@ static const TapeAlignBranch_t *SelectReadyTapeBranch(void)
     return (const TapeAlignBranch_t *) 0;
 }
 
-static const TapeAlignBranch_t *FindTapeBranchForEvent(ES_EventTyp_t eventType)
-{
-    uint8_t i;
-
-    for (i = 0u; i < (uint8_t) (sizeof(VerticalBranches) / sizeof(VerticalBranches[0])); i++) {
-        if (VerticalBranches[i].comboEvent == eventType) {
-            return &VerticalBranches[i];
-        }
-    }
-    for (i = 0u; i < (uint8_t) (sizeof(HorizontalBranches) / sizeof(HorizontalBranches[0])); i++) {
-        if (HorizontalBranches[i].comboEvent == eventType) {
-            return &HorizontalBranches[i];
-        }
-    }
-
-    return (const TapeAlignBranch_t *) 0;
-}
-
 static uint8_t StartTapeBranch(const TapeAlignBranch_t *branch,
         AlignState_t *nextState)
 {
@@ -445,10 +396,9 @@ static uint8_t StartTapeBranch(const TapeAlignBranch_t *branch,
 
     activeTapeBranch = *branch;
     *nextState = TapeTurnStateForHeading();
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     headingError = RobotIMU_GetHeadingErrorToZeroDeg();
-    printf("[ALIGN] branch %s sensors=%u+%u off pivot=tape%u headingError=",
-            EventNames[branch->comboEvent],
+    printf("[ALIGN] branch sensors=%u+%u off pivot=tape%u headingError=",
             (unsigned int) branch->sensorA,
             (unsigned int) branch->sensorB,
             (unsigned int) branch->pivotSensor);
@@ -486,116 +436,46 @@ static void RefreshTapeOffFlagsFromHardware(void)
     }
 }
 
-static uint8_t UpdateTapeFlagsFromEvent(ES_EventTyp_t eventType)
+static uint8_t UpdateTapeFlagsFromChangedMask(uint8_t currentMask,
+        uint8_t changedMask)
 {
-    uint8_t sensorNumber;
+    uint8_t sensor;
     uint8_t mask;
+    uint8_t updated = FALSE;
 
-    if (SensorFromTapeEvent(eventType, &sensorNumber) == FALSE) {
-        return FALSE;
+    changedMask &= TAPE_SENSOR_ALL_MASK;
+    currentMask &= TAPE_SENSOR_ALL_MASK;
+    for (sensor = 1u; sensor <= 5u; sensor++) {
+        mask = TapeMaskForSensor(sensor);
+        if ((changedMask & mask) == 0u) {
+            continue;
+        }
+        if ((currentMask & mask) == 0u) {
+            tapeOffFlags |= mask;
+        } else {
+            tapeOffFlags &= (uint8_t) ~mask;
+        }
+        updated = TRUE;
     }
-
-    mask = TapeMaskForSensor(sensorNumber);
-    if (IsTapeOffEvent(eventType) == TRUE) {
-        tapeOffFlags |= mask;
-    } else {
-        tapeOffFlags &= (uint8_t) ~mask;
-    }
-    return TRUE;
-}
-
-static uint8_t SensorFromTapeEvent(ES_EventTyp_t eventType, uint8_t *sensorNumber)
-{
-    switch (eventType) {
-    case TapeSensor1OnEvent:
-    case TapeSensor1OffEvent:
-        *sensorNumber = 1u;
-        return TRUE;
-    case TapeSensor2OnEvent:
-    case TapeSensor2OffEvent:
-        *sensorNumber = 2u;
-        return TRUE;
-    case TapeSensor3OnEvent:
-    case TapeSensor3OffEvent:
-        *sensorNumber = 3u;
-        return TRUE;
-    case TapeSensor4OnEvent:
-    case TapeSensor4OffEvent:
-        *sensorNumber = 4u;
-        return TRUE;
-    case TapeSensor5OnEvent:
-    case TapeSensor5OffEvent:
-    case TapeSensor5LowToHighEvent:
-        *sensorNumber = 5u;
-        return TRUE;
-    default:
-        return FALSE;
-    }
-}
-
-static uint8_t IsTapeOnEvent(ES_EventTyp_t eventType)
-{
-    switch (eventType) {
-    case TapeSensor1OnEvent:
-    case TapeSensor2OnEvent:
-    case TapeSensor3OnEvent:
-    case TapeSensor4OnEvent:
-    case TapeSensor5OnEvent:
-    case TapeSensor5LowToHighEvent:
-        return TRUE;
-    default:
-        return FALSE;
-    }
-}
-
-static uint8_t IsTapeOffEvent(ES_EventTyp_t eventType)
-{
-    switch (eventType) {
-    case TapeSensor1OffEvent:
-    case TapeSensor2OffEvent:
-    case TapeSensor3OffEvent:
-    case TapeSensor4OffEvent:
-    case TapeSensor5OffEvent:
-        return TRUE;
-    default:
-        return FALSE;
-    }
-}
-
-static uint8_t IsTapeComboEvent(ES_EventTyp_t eventType)
-{
-    switch (eventType) {
-    case TapeSensor1And2OffEvent:
-    case TapeSensor1And5OffEvent:
-    case TapeSensor2And5OffEvent:
-    case TapeSensor3And4OffEvent:
-    case TapeSensor3And5OffEvent:
-    case TapeSensor4And5OffEvent:
-        return TRUE;
-    default:
-        return FALSE;
-    }
+    return updated;
 }
 
 static uint8_t CompleteIfRealignedTapeOn(ES_Event *event)
 {
-    uint8_t sensorNumber;
-    uint8_t sensorMask;
+    uint8_t currentMask;
+    uint8_t changedMask;
 
-    if (IsTapeOnEvent(event->EventType) == FALSE) {
-        return FALSE;
-    }
-    if (SensorFromTapeEvent(event->EventType, &sensorNumber) == FALSE) {
+    if (event->EventType != TapeChangedEvent) {
         return FALSE;
     }
 
-    sensorMask = TapeMaskForSensor(sensorNumber);
-    UpdateTapeFlagsFromEvent(event->EventType);
-    if ((activeTapeBranch.realignMask & sensorMask) == 0u) {
+    currentMask = TAPE_EVENT_CURRENT_MASK(event->EventParam);
+    changedMask = TAPE_EVENT_CHANGED_MASK(event->EventParam);
+    UpdateTapeFlagsFromChangedMask(currentMask, changedMask);
+    if ((currentMask & changedMask & activeTapeBranch.realignMask) == 0u) {
         event->EventType = ES_NO_EVENT;
         return FALSE;
     }
-
     RobotMotion_Stop();
     event->EventType = RealignedEvent;
     event->EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
@@ -628,24 +508,6 @@ static void DriveTapeTurn(uint8_t turnLeft)
     } else {
         RobotMotion_TurnRightAbout(pivot, TURN_SPEED_IPS);
     }
-}
-
-static void PostTapeComboEvent(const TapeAlignBranch_t *branch)
-{
-    ES_Event event;
-    uint8_t tapeMask = TapeStateMask();
-
-    event.EventType = branch->comboEvent;
-    event.EventParam = tapeMask;
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
-    printf("[ALIGN] post %s tapeMask=0x%02X pivot=tape%u headingError=",
-            EventNames[branch->comboEvent],
-            (unsigned int) tapeMask,
-            (unsigned int) branch->pivotSensor);
-    PrintFixedDeg(RobotIMU_GetHeadingErrorToZeroDeg());
-    printf("\r\n");
-#endif
-    PostRobotHSM(event);
 }
 
 static void PrintFixedDeg(float value)

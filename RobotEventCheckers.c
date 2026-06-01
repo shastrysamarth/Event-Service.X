@@ -3,6 +3,7 @@
 #include "AlignSubHSM.h"
 #include "ES_Configure.h"
 #include "ES_Events.h"
+#include "ES_Framework.h"
 #include "ES_Timers.h"
 #include "FindFrontTapeSubHSM.h"
 #include "NavigateToISZSubHSM.h"
@@ -39,6 +40,7 @@ static uint8_t beaconHadIncrease = FALSE;
 static uint32_t lastTapeSampleLogMs = 0u;
 static uint8_t beaconStreamActive = FALSE;
 static uint32_t lastBeaconStreamPrintMs = 0u;
+static uint32_t lastImuUpdateMs = 0u;
 
 static void BeaconStreamTick(void);
 static uint8_t PostEvent(ES_EventTyp_t eventType, uint16_t eventParam);
@@ -56,13 +58,14 @@ static void LogBeaconEvent(ES_EventTyp_t eventType, uint16_t current,
                            uint16_t peak);
 static void LogShooterADCInitial(uint16_t raw);
 static void LogTapeInitial(uint8_t sensorNumber, uint8_t raw, uint8_t onTape);
-static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape,
-                          ES_EventTyp_t eventType);
+static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape);
+static void LogTapeMask(uint8_t tapeMask, uint8_t changedMask);
 static void LogTapeSample(const uint8_t raw[5], const uint8_t onTape[5]);
 static uint8_t TapeMaskFromReadings(const uint8_t onTape[5]);
+static uint8_t BumpMaskFromReadings(const uint8_t bumped[4]);
 static void LogBumpInitial(uint8_t sensorNumber, uint8_t raw, uint8_t bumped);
-static void LogBumpChange(uint8_t sensorNumber, uint8_t raw, uint8_t bumped,
-                          ES_EventTyp_t eventType);
+static void LogBumpChange(uint8_t sensorNumber, uint8_t raw, uint8_t bumped);
+static void LogBumpMask(uint8_t bumpMask, uint8_t changedMask);
 static void PrintFixedValue(const char *name, float value, const char *unit);
 
 void InitRobotEventCheckers(void)
@@ -115,10 +118,21 @@ void InitRobotEventCheckers(void)
     peakBeaconADC = lastBeaconADC;
     minBeaconADC = lastBeaconADC;
     beaconHadIncrease = FALSE;
+    lastImuUpdateMs = ES_Timer_GetTime() - ROBOT_IMU_UPDATE_PERIOD_MS;
 #if ROBOT_PLUGPLAY_USE_SHOOTER_ADC
     LogShooterADCInitial(RobotSensors_ReadShooterMotorADC());
 #endif
     initialized = TRUE;
+}
+
+uint8_t RobotEventCheckers_GetRobotQueueMaxDepth(void)
+{
+    return ES_GetServiceMaxQueueDepth(0u);
+}
+
+uint16_t RobotEventCheckers_GetRobotQueuePostFailures(void)
+{
+    return ES_GetServicePostFailures(0u);
 }
 
 void RobotEventCheckers_ToggleBeaconStream(void)
@@ -178,6 +192,7 @@ static void BeaconStreamTick(void)
 uint8_t CheckRobotPeriodic(void)
 {
     uint8_t keyboardHandled = FALSE;
+    uint32_t nowMs;
 
     if (initialized == FALSE)
     {
@@ -191,7 +206,12 @@ uint8_t CheckRobotPeriodic(void)
     }
 #endif
 
-    RobotIMU_Update();
+    nowMs = ES_Timer_GetTime();
+    if ((uint32_t)(nowMs - lastImuUpdateMs) >= ROBOT_IMU_UPDATE_PERIOD_MS)
+    {
+        lastImuUpdateMs = nowMs;
+        RobotIMU_Update();
+    }
     RobotIMU_DebugStreamTick();
     BeaconStreamTick();
     return keyboardHandled;
@@ -257,26 +277,14 @@ uint8_t CheckBeaconEvents(void)
 
 uint8_t CheckTapeEvents(void)
 {
-    ES_EventTyp_t onEvents[5] = {
-        TapeSensor1OnEvent,
-        TapeSensor2OnEvent,
-        TapeSensor3OnEvent,
-        TapeSensor4OnEvent,
-        TapeSensor5OnEvent,
-    };
-    ES_EventTyp_t offEvents[5] = {
-        TapeSensor1OffEvent,
-        TapeSensor2OffEvent,
-        TapeSensor3OffEvent,
-        TapeSensor4OffEvent,
-        TapeSensor5OffEvent,
-    };
     uint8_t i;
     uint8_t raw;
     uint8_t current;
     uint8_t rawReadings[5];
     uint8_t tapeReadings[5];
     uint8_t tapeMask;
+    uint8_t previousMask;
+    uint8_t changedMask;
     uint32_t now;
     uint8_t postedAny = FALSE;
 
@@ -298,29 +306,26 @@ uint8_t CheckTapeEvents(void)
     }
 
     tapeMask = TapeMaskFromReadings(tapeReadings);
+    previousMask = TapeMaskFromReadings(last.tape);
+    changedMask = (uint8_t) (tapeMask ^ previousMask);
 
-    for (i = 0; i < 5u; i++)
+    if (changedMask != 0u)
     {
-        raw = rawReadings[i];
-        current = tapeReadings[i];
-        if ((i == 4u) && (current == TRUE) && (last.tape[i] == FALSE) &&
-            (NavigateToISZ_IsCountingTape5() == TRUE))
+        for (i = 0; i < 5u; i++)
         {
+            if ((changedMask & (uint8_t)(1u << i)) == 0u)
+            {
+                continue;
+            }
+            raw = rawReadings[i];
+            current = tapeReadings[i];
             last.tape[i] = current;
-            FindFrontTape_FastTapeReaction(TapeSensor5LowToHighEvent, tapeMask);
-            postedAny |= PostEvent(TapeSensor5LowToHighEvent, tapeMask);
-            LogTapeChange(i + 1u, raw, current, TapeSensor5LowToHighEvent);
-            continue;
+            LogTapeChange(i + 1u, raw, current);
         }
-        if (current != last.tape[i])
-        {
-            ES_EventTyp_t eventType = current ? onEvents[i] : offEvents[i];
-
-            last.tape[i] = current;
-            FindFrontTape_FastTapeReaction(eventType, tapeMask);
-            postedAny |= PostEvent(eventType, tapeMask);
-            LogTapeChange(i + 1u, raw, current, eventType);
-        }
+        LogTapeMask(tapeMask, changedMask);
+        FindFrontTape_FastTapeReaction(TapeChangedEvent, tapeMask);
+        postedAny = PostEvent(TapeChangedEvent,
+                TAPE_EVENT_MAKE_PARAM(tapeMask, changedMask));
     }
 
     now = ES_Timer_GetTime();
@@ -372,21 +377,15 @@ uint8_t CheckSolenoidEvents(void)
 
 uint8_t CheckBumpEvents(void)
 {
-    ES_EventTyp_t onEvents[4] = {
-        BumpSensor1OnEvent,
-        BumpSensor2OnEvent,
-        BumpSensor3OnEvent,
-        BumpSensor4OnEvent,
-    };
-    ES_EventTyp_t offEvents[4] = {
-        BumpSensor1OffEvent,
-        BumpSensor2OffEvent,
-        BumpSensor3OffEvent,
-        BumpSensor4OffEvent,
-    };
     uint8_t i;
     uint8_t raw;
     uint8_t current;
+    uint8_t rawReadings[4];
+    uint8_t bumpReadings[4];
+    uint8_t bumpMask;
+    uint8_t previousMask;
+    uint8_t changedMask;
+    uint8_t postedAny = FALSE;
 
 #if !ROBOT_PLUGPLAY_USE_ANY_BUMP
     return FALSE;
@@ -399,19 +398,35 @@ uint8_t CheckBumpEvents(void)
 
     for (i = 0; i < 4u; i++)
     {
-        raw = RobotSensors_ReadBumpDigital((BumpSensor_t)(i + 1u));
+        raw = RobotSensors_GetBumpDigital((BumpSensor_t)(i + 1u));
         current = RobotSensors_BumpRawIsOn(raw);
-        if (current != last.bump[i])
-        {
-            ES_EventTyp_t eventType = current ? onEvents[i] : offEvents[i];
-
-            LogBumpChange(i + 1u, raw, current, eventType);
-            last.bump[i] = current;
-            return PostEvent(eventType, (uint16_t)(i + 1u));
-        }
+        rawReadings[i] = raw;
+        bumpReadings[i] = current;
     }
 
-    return FALSE;
+    bumpMask = BumpMaskFromReadings(bumpReadings);
+    previousMask = BumpMaskFromReadings(last.bump);
+    changedMask = (uint8_t) (bumpMask ^ previousMask);
+
+    if (changedMask != 0u)
+    {
+        for (i = 0; i < 4u; i++)
+        {
+            if ((changedMask & (uint8_t)(1u << i)) == 0u)
+            {
+                continue;
+            }
+            raw = rawReadings[i];
+            current = bumpReadings[i];
+            last.bump[i] = current;
+            LogBumpChange(i + 1u, raw, current);
+        }
+        LogBumpMask(bumpMask, changedMask);
+        postedAny = PostEvent(BumpChangedEvent,
+                BUMP_EVENT_MAKE_PARAM(bumpMask, changedMask));
+    }
+
+    return postedAny;
 }
 
 uint8_t CheckDistanceMove(void)
@@ -548,7 +563,7 @@ static void LogIMUInitial(void)
 
 static void LogIMUEvent(ES_EventTyp_t eventType)
 {
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     printf("[IMU] ");
     PrintFixedValue("headingError", RobotIMU_GetHeadingErrorToZeroDeg(), "deg");
     printf(" ");
@@ -577,7 +592,7 @@ static void LogBeaconInitial(uint16_t raw, uint16_t smoothed)
 static void LogBeaconEvent(ES_EventTyp_t eventType, uint16_t current,
                            uint16_t peak)
 {
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     printf("[BEACON] smoothed=%u peak=%u distance=%u ft -> %s\r\n",
            (unsigned int)current,
            (unsigned int)peak,
@@ -634,27 +649,37 @@ static void LogTapeInitial(uint8_t sensorNumber, uint8_t raw, uint8_t onTape)
 #endif
 }
 
-static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape,
-                          ES_EventTyp_t eventType)
+static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape)
 {
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
-    printf("[TAPE] sensor%u raw=%u line=%s onTape=%u -> %s\r\n",
+#if ROBOT_REALTIME_TRACE
+    printf("[TAPE] sensor%u raw=%u line=%s onTape=%u\r\n",
            (unsigned int)sensorNumber,
            (unsigned int)raw,
            raw ? "HIGH" : "LOW",
-           (unsigned int)onTape,
-           EventNames[eventType]);
+           (unsigned int)onTape);
 #else
     (void)sensorNumber;
     (void)raw;
     (void)onTape;
-    (void)eventType;
 #endif
+}
+
+static void LogTapeMask(uint8_t tapeMask, uint8_t changedMask)
+{
+    printf("[TAPE] change mask=0x%02X changed=0x%02X "
+           "s1=%s s2=%s s3=%s s4=%s s5=%s\r\n",
+           (unsigned int)tapeMask,
+           (unsigned int)changedMask,
+           (tapeMask & TAPE_SENSOR_1_MASK) ? "ON " : "off",
+           (tapeMask & TAPE_SENSOR_2_MASK) ? "ON " : "off",
+           (tapeMask & TAPE_SENSOR_3_MASK) ? "ON " : "off",
+           (tapeMask & TAPE_SENSOR_4_MASK) ? "ON " : "off",
+           (tapeMask & TAPE_SENSOR_5_MASK) ? "ON " : "off");
 }
 
 static void LogTapeSample(const uint8_t raw[5], const uint8_t onTape[5])
 {
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     printf("[TAPE] sample raw=%u/%u/%u/%u/%u on=%u/%u/%u/%u/%u\r\n",
            (unsigned int)raw[0],
            (unsigned int)raw[1],
@@ -688,6 +713,22 @@ static uint8_t TapeMaskFromReadings(const uint8_t onTape[5])
     return mask;
 }
 
+static uint8_t BumpMaskFromReadings(const uint8_t bumped[4])
+{
+    uint8_t mask = 0u;
+    uint8_t i;
+
+    for (i = 0u; i < 4u; i++)
+    {
+        if (bumped[i] == TRUE)
+        {
+            mask |= (uint8_t)(1u << i);
+        }
+    }
+
+    return mask;
+}
+
 static void LogBumpInitial(uint8_t sensorNumber, uint8_t raw, uint8_t bumped)
 {
 #if defined(DEBUG) || defined(ROBOT_DEBUG)
@@ -703,20 +744,30 @@ static void LogBumpInitial(uint8_t sensorNumber, uint8_t raw, uint8_t bumped)
 #endif
 }
 
-static void LogBumpChange(uint8_t sensorNumber, uint8_t raw, uint8_t bumped,
-                          ES_EventTyp_t eventType)
+static void LogBumpChange(uint8_t sensorNumber, uint8_t raw, uint8_t bumped)
 {
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
-    printf("[BUMP] sensor%u raw=%u line=%s bumped=%u -> %s\r\n",
+#if ROBOT_REALTIME_TRACE
+    printf("[BUMP] sensor%u raw=%u line=%s bumped=%u\r\n",
            (unsigned int)sensorNumber,
            (unsigned int)raw,
            raw ? "HIGH" : "LOW",
-           (unsigned int)bumped,
-           EventNames[eventType]);
+           (unsigned int)bumped);
 #else
     (void)sensorNumber;
     (void)raw;
     (void)bumped;
-    (void)eventType;
+#endif
+}
+
+static void LogBumpMask(uint8_t bumpMask, uint8_t changedMask)
+{
+#if ROBOT_REALTIME_TRACE
+    printf("[BUMP] mask=0x%02X changed=0x%02X -> %s\r\n",
+           (unsigned int)bumpMask,
+           (unsigned int)changedMask,
+           EventNames[BumpChangedEvent]);
+#else
+    (void)bumpMask;
+    (void)changedMask;
 #endif
 }

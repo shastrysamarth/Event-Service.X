@@ -30,6 +30,11 @@ static uint32_t distanceDurationMs = 0u;
 static uint32_t distanceRemainingMs = 0u;
 static const char *lastMotionCommand = "Init";
 static const char *lastMotionPivot = "none";
+/* Last command/pivot we already logged, so we only print on a real change.
+ * RobotMotion stores command/pivot as stable string literals, so comparing
+ * pointers is enough to detect a transition. */
+static const char *prevLoggedCommand = "Init";
+static const char *prevLoggedPivot = "none";
 static float lastFrontLeftIPS = 0.0f;
 static float lastFrontRightIPS = 0.0f;
 static float lastRearLeftIPS = 0.0f;
@@ -181,7 +186,7 @@ void RobotMotion_StartDistanceMoveAtSpeed(DistanceAxis_t axis, int8_t direction,
     distanceRemainingMs = distanceDurationMs;
     distanceStartMs = ES_Timer_GetTime();
 
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     printf("[MOTOR] distance-move start axis=%s dir=%d target=",
             (axis == DISTANCE_AXIS_X) ? "X" : "Y", (int) direction);
     PrintFixedInline(targetInches, "in");
@@ -196,7 +201,7 @@ void RobotMotion_StopDistanceMove(void)
     distanceMoveActive = FALSE;
     distanceMovePaused = FALSE;
     distanceRemainingMs = 0u;
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     printf("[MOTOR] distance-move stop\r\n");
 #endif
 }
@@ -219,7 +224,7 @@ void RobotMotion_PauseDistanceMove(void)
     }
     distanceMoveActive = FALSE;
     distanceMovePaused = TRUE;
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     printf("[MOTOR] distance-move pause remainingMs=%lu\r\n",
             (unsigned long) distanceRemainingMs);
 #endif
@@ -235,7 +240,7 @@ void RobotMotion_ResumeDistanceMove(void)
     distanceStartMs = ES_Timer_GetTime();
     distanceMoveActive = TRUE;
     distanceMovePaused = FALSE;
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     printf("[MOTOR] distance-move resume remainingMs=%lu\r\n",
             (unsigned long) distanceDurationMs);
 #endif
@@ -280,9 +285,19 @@ float RobotMotion_GetDistanceTargetInches(void)
     return distanceTargetInches;
 }
 
+const char *RobotMotion_GetCommandName(void)
+{
+    return lastMotionCommand;
+}
+
+const char *RobotMotion_GetPivotName(void)
+{
+    return lastMotionPivot;
+}
+
 void RobotMotion_DebugPrintCurrentCommand(const char *context)
 {
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     printf("[MOTOR] %s control=%s pivot=%s ", context,
             lastMotionCommand,
             lastMotionPivot);
@@ -370,7 +385,7 @@ static void SetDriveWheels(float frontLeft, float frontRight, float rearLeft, fl
     SetMotor(MOTOR_REAR_LEFT, lastRearLeftDuty);
     SetMotor(MOTOR_REAR_RIGHT, lastRearRightDuty);
 
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
+#if ROBOT_REALTIME_TRACE
     printf("[MOTOR] %s pivot=%s FL=%d FR=%d RL=%d RR=%d\r\n",
             lastMotionCommand, lastMotionPivot,
             lastFrontLeftDuty, lastFrontRightDuty,

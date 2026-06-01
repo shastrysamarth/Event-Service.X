@@ -5,6 +5,8 @@
 
 void InitRobotEventCheckers(void);
 void RobotEventCheckers_ToggleBeaconStream(void);
+uint8_t RobotEventCheckers_GetRobotQueueMaxDepth(void);
+uint16_t RobotEventCheckers_GetRobotQueuePostFailures(void);
 
 uint8_t CheckRobotPeriodic(void);
 uint8_t CheckBeaconEvents(void);

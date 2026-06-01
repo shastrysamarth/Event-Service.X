@@ -41,8 +41,13 @@
 #define IMU_STATIONARY_CONFIRM_MS 400u
 /* DEPRECATED: heading rotation sign for field-frame accel integration (cosf/sinf removed). */
 /* #define IMU_HEADING_ROT_SIGN (-1.0f) */
+#define ROBOT_IMU_UPDATE_PERIOD_MS 20u
+#define IMU_MODE_CHECK_PERIOD_MS 250u
 #define IMU_DEBUG_STREAM_PERIOD_MS 250u
 #define ALIGN_STABLE_SAMPLE_COUNT 3u
+#ifndef ROBOT_REALTIME_TRACE
+#define ROBOT_REALTIME_TRACE 0
+#endif
 /* RealignedEvent EventParam: sensor path runs IMU zero + ref re-anchor in Navigate. */
 #define ALIGN_REALIGNED_SOURCE_MANUAL (0u)
 #define ALIGN_REALIGNED_SOURCE_SENSOR (1u)
@@ -57,6 +62,33 @@
 #define TAPE_SENSOR_5_MASK (1u << 4)
 #define TAPE_SENSOR_ALL_MASK (TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK | \
     TAPE_SENSOR_3_MASK | TAPE_SENSOR_4_MASK | TAPE_SENSOR_5_MASK)
+#define TAPE_EVENT_CHANGED_SHIFT 8u
+#define TAPE_EVENT_MAKE_PARAM(currentMask, changedMask) \
+    ((uint16_t) (((uint16_t) ((changedMask) & TAPE_SENSOR_ALL_MASK) << \
+    TAPE_EVENT_CHANGED_SHIFT) | ((currentMask) & TAPE_SENSOR_ALL_MASK)))
+#define TAPE_EVENT_CURRENT_MASK(eventParam) \
+    ((uint8_t) ((eventParam) & TAPE_SENSOR_ALL_MASK))
+#define TAPE_EVENT_CHANGED_MASK(eventParam) \
+    ((uint8_t) (((eventParam) >> TAPE_EVENT_CHANGED_SHIFT) & \
+    TAPE_SENSOR_ALL_MASK))
+
+/* Bump event params use bit = 1 when that bump sensor is pressed.
+ * Bump sensors: bit0 = FR (1), bit1 = FL (2), bit2 = RR (3), bit3 = RL (4). */
+#define BUMP_SENSOR_1_MASK (1u << 0)
+#define BUMP_SENSOR_2_MASK (1u << 1)
+#define BUMP_SENSOR_3_MASK (1u << 2)
+#define BUMP_SENSOR_4_MASK (1u << 3)
+#define BUMP_SENSOR_ALL_MASK (BUMP_SENSOR_1_MASK | BUMP_SENSOR_2_MASK | \
+    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK)
+#define BUMP_EVENT_CHANGED_SHIFT 8u
+#define BUMP_EVENT_MAKE_PARAM(currentMask, changedMask) \
+    ((uint16_t) (((uint16_t) ((changedMask) & BUMP_SENSOR_ALL_MASK) << \
+    BUMP_EVENT_CHANGED_SHIFT) | ((currentMask) & BUMP_SENSOR_ALL_MASK)))
+#define BUMP_EVENT_CURRENT_MASK(eventParam) \
+    ((uint8_t) ((eventParam) & BUMP_SENSOR_ALL_MASK))
+#define BUMP_EVENT_CHANGED_MASK(eventParam) \
+    ((uint8_t) (((eventParam) >> BUMP_EVENT_CHANGED_SHIFT) & \
+    BUMP_SENSOR_ALL_MASK))
 
 #define BNO055_AXIS_X 0u
 #define BNO055_AXIS_Y 1u

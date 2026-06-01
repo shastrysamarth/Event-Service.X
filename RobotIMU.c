@@ -56,6 +56,7 @@ static float yAccelIPS2 = 0.0f;
 /* Compatibility getter name kept; value follows BNO055_HEADING_AXIS. */
 static float zGyroDPS = 0.0f;
 static uint32_t lastUpdateMs = 0;
+static uint32_t lastModeCheckMs = 0;
 static uint16_t stationaryMs = 0u;
 static uint8_t isStationary = TRUE;
 static uint8_t debugStreamEnabled = FALSE;
@@ -101,6 +102,7 @@ static int16_t SelectHeadingGyroAxis(const int16_t vector[3]);
 static int16_t SelectRobotXAccelAxis(const int16_t vector[3]);
 static int16_t SelectRobotYAccelAxis(const int16_t vector[3]);
 static uint8_t ReadHeadingAxisRaw(int16_t *headingRaw);
+static void RobotIMU_UpdateDebugData(void);
 static const char *HeadingAxisName(void);
 static const char *AxisName(uint8_t axis);
 static char AxisSignChar(int8_t sign);
@@ -272,18 +274,9 @@ void RobotIMU_Update(void)
 #if ROBOT_PLUGPLAY_USE_BNO055
     uint8_t buffer[6];
     uint8_t gyroBuffer[6];
-    uint8_t tempBuffer[8];
     uint32_t now = ES_Timer_GetTime();
     uint32_t elapsedMs = now - lastUpdateMs;
-    float dt;
-    int16_t axRaw;
-    int16_t ayRaw;
-    int16_t azRaw;
-    int16_t gxRaw;
-    int16_t gyRaw;
-    int16_t gzRaw;
     int16_t headingGyroRaw;
-    uint8_t planarAccelIsStill;
     uint8_t gyroIsStill;
 
     if (imuReady == FALSE) {
@@ -303,63 +296,21 @@ void RobotIMU_Update(void)
         lastReadOk = FALSE;
     }
 
-    if (BNO055ReadLen(BNO055_LINEAR_ACCEL_DATA_X_LSB_REG, buffer, 6u) == TRUE) {
-        dt = ((float) elapsedMs) / 1000.0f;
-        StoreVector3(buffer, rawLinearAccel);
-        axRaw = SelectRobotXAccelAxis(rawLinearAccel);
-        ayRaw = SelectRobotYAccelAxis(rawLinearAccel);
-        azRaw = SelectHeadingGyroAxis(rawLinearAccel);
-
-        int16_t axRawStill = axRaw;
-        int16_t ayRawStill = ayRaw;
-
-        if (BNO055ReadLen(BNO055_GYRO_DATA_X_LSB_REG, gyroBuffer, 6u) == TRUE) {
-            StoreVector3(gyroBuffer, rawGyro);
-            gxRaw = ReadS16(&gyroBuffer[0]);
-            gyRaw = ReadS16(&gyroBuffer[2]);
-            gzRaw = ReadS16(&gyroBuffer[4]);
-        } else {
-            lastReadOk = FALSE;
-            gxRaw = rawGyro[0];
-            gyRaw = rawGyro[1];
-            gzRaw = rawGyro[2];
-        }
+    if (BNO055ReadLen(BNO055_GYRO_DATA_X_LSB_REG, gyroBuffer, 6u) == TRUE) {
+        StoreVector3(gyroBuffer, rawGyro);
         headingGyroRaw = SelectHeadingGyroAxis(rawGyro);
+        zGyroDPS = ((float) headingGyroRaw) / 16.0f;
+    } else {
+        lastReadOk = FALSE;
+        headingGyroRaw = SelectHeadingGyroAxis(rawGyro);
+    }
 
-        if (BNO055ReadLen(BNO055_ACCEL_DATA_X_LSB_REG, tempBuffer, 6u) == TRUE) {
-            StoreVector3(tempBuffer, rawAccel);
-        } else {
-            lastReadOk = FALSE;
-        }
-        if (BNO055ReadLen(BNO055_GRAVITY_DATA_X_LSB_REG, tempBuffer, 6u) == TRUE) {
-            StoreVector3(tempBuffer, rawGravity);
-        } else {
-            lastReadOk = FALSE;
-        }
-        if (BNO055ReadLen(BNO055_QUATERNION_DATA_W_LSB_REG, tempBuffer, 8u) == TRUE) {
-            StoreQuaternion(tempBuffer, rawQuaternion);
-        } else {
-            lastReadOk = FALSE;
-        }
-        if (BNO055Read8(BNO055_CALIB_STAT_REG, &rawCalib) != TRUE) {
-            lastReadOk = FALSE;
-        }
-        if (BNO055Read8(BNO055_TEMP_REG, &rawTempC) != TRUE) {
-            lastReadOk = FALSE;
-        }
-        if (BNO055Read8(BNO055_ST_RESULT_REG, &rawSelfTest) != TRUE) {
-            lastReadOk = FALSE;
-        }
-        if (BNO055Read8(BNO055_SYS_STATUS_REG, &rawSystemStatus) != TRUE) {
-            lastReadOk = FALSE;
-        }
-        if (BNO055Read8(BNO055_SYS_ERR_REG, &rawSystemError) != TRUE) {
-            lastReadOk = FALSE;
-        }
+    if ((lastModeCheckMs == 0u) ||
+            ((uint32_t)(now - lastModeCheckMs) >= IMU_MODE_CHECK_PERIOD_MS)) {
+        lastModeCheckMs = now;
         if (BNO055Read8(BNO055_OPR_MODE_REG, &rawOperationMode) != TRUE) {
             lastReadOk = FALSE;
         }
-
         if (rawOperationMode != BNO055_OPERATION_MODE_NDOF) {
             lastModeWasNDOF = FALSE;
             RobotIMU_EnsureNDOF();
@@ -367,53 +318,19 @@ void RobotIMU_Update(void)
             return;
         }
         lastModeWasNDOF = TRUE;
+    }
 
-        planarAccelIsStill = ((AbsS16(axRawStill) <= IMU_STILL_ACCEL_RAW) &&
-                (AbsS16(ayRawStill) <= IMU_STILL_ACCEL_RAW)) ? TRUE : FALSE;
-        gyroIsStill = (AbsS16(headingGyroRaw) <= IMU_STILL_GYRO_RAW) ? TRUE : FALSE;
-        (void) azRaw;
-        (void) gxRaw;
-        (void) gyRaw;
-        (void) gzRaw;
-
-        axRaw = ApplyDeadbandS16(axRaw, IMU_ACCEL_INTEGRATE_DEADBAND_RAW);
-        ayRaw = ApplyDeadbandS16(ayRaw, IMU_ACCEL_INTEGRATE_DEADBAND_RAW);
-
-        /*
-         * DEPRECATED: field-frame rotation via cosf/sinf removed to avoid
-         * soft-float libm stack overflow on PIC32MX (1 KB stack).
-         * Position integration is no longer used for control; distance moves
-         * are timer-based and alignment is heading-only.
-         * xAccelIPS2/yAccelIPS2 are kept as raw body-frame values for debug.
-         */
-        xAccelIPS2 = (((float) axRaw) / BNO055_ACCEL_LSB_PER_MPS2) * MPS2_TO_INPS2;
-        yAccelIPS2 = (((float) ayRaw) / BNO055_ACCEL_LSB_PER_MPS2) * MPS2_TO_INPS2;
-        zGyroDPS = ((float) headingGyroRaw) / 16.0f;
-
-        if ((planarAccelIsStill == TRUE) && (gyroIsStill == TRUE)) {
-            if (stationaryMs < IMU_STATIONARY_CONFIRM_MS) {
-                stationaryMs += (elapsedMs > 0xFFFFu) ? 0xFFFFu : (uint16_t) elapsedMs;
-            }
-            if (stationaryMs >= IMU_STATIONARY_CONFIRM_MS) {
-                xVelocityIPS = 0.0f;
-                yVelocityIPS = 0.0f;
-                xAccelIPS2 = 0.0f;
-                yAccelIPS2 = 0.0f;
-                isStationary = TRUE;
-            }
-        } else {
-            stationaryMs = 0u;
-            isStationary = FALSE;
+    gyroIsStill = (AbsS16(headingGyroRaw) <= IMU_STILL_GYRO_RAW) ? TRUE : FALSE;
+    if (gyroIsStill == TRUE) {
+        if (stationaryMs < IMU_STATIONARY_CONFIRM_MS) {
+            stationaryMs += (elapsedMs > 0xFFFFu) ? 0xFFFFu : (uint16_t) elapsedMs;
         }
-
-        if (isStationary == FALSE) {
-            xVelocityIPS += xAccelIPS2 * dt;
-            yVelocityIPS += yAccelIPS2 * dt;
+        if (stationaryMs >= IMU_STATIONARY_CONFIRM_MS) {
+            isStationary = TRUE;
         }
-        xInches += xVelocityIPS * dt;
-        yInches += yVelocityIPS * dt;
     } else {
-        lastReadOk = FALSE;
+        stationaryMs = 0u;
+        isStationary = FALSE;
     }
 
     lastUpdateMs = now;
@@ -434,6 +351,7 @@ void RobotIMU_ZeroAll(void)
     headingDeg = 0.0f;
     RobotIMU_ZeroPositionVelocity();
     lastUpdateMs = ES_Timer_GetTime();
+    lastModeCheckMs = 0u;
 }
 
 void RobotIMU_ZeroHeading(void)
@@ -522,9 +440,72 @@ float RobotIMU_GetZGyroDPS(void)
     return zGyroDPS;
 }
 
+static void RobotIMU_UpdateDebugData(void)
+{
+#if ROBOT_PLUGPLAY_USE_BNO055
+    uint8_t buffer[8];
+    int16_t axRaw;
+    int16_t ayRaw;
+
+    if (imuReady == FALSE) {
+        return;
+    }
+
+    lastReadOk = TRUE;
+
+    if (BNO055ReadLen(BNO055_LINEAR_ACCEL_DATA_X_LSB_REG, buffer, 6u) == TRUE) {
+        StoreVector3(buffer, rawLinearAccel);
+        axRaw = ApplyDeadbandS16(SelectRobotXAccelAxis(rawLinearAccel),
+                IMU_ACCEL_INTEGRATE_DEADBAND_RAW);
+        ayRaw = ApplyDeadbandS16(SelectRobotYAccelAxis(rawLinearAccel),
+                IMU_ACCEL_INTEGRATE_DEADBAND_RAW);
+        xAccelIPS2 = (((float) axRaw) / BNO055_ACCEL_LSB_PER_MPS2) *
+                MPS2_TO_INPS2;
+        yAccelIPS2 = (((float) ayRaw) / BNO055_ACCEL_LSB_PER_MPS2) *
+                MPS2_TO_INPS2;
+    } else {
+        lastReadOk = FALSE;
+    }
+    if (BNO055ReadLen(BNO055_ACCEL_DATA_X_LSB_REG, buffer, 6u) == TRUE) {
+        StoreVector3(buffer, rawAccel);
+    } else {
+        lastReadOk = FALSE;
+    }
+    if (BNO055ReadLen(BNO055_GRAVITY_DATA_X_LSB_REG, buffer, 6u) == TRUE) {
+        StoreVector3(buffer, rawGravity);
+    } else {
+        lastReadOk = FALSE;
+    }
+    if (BNO055ReadLen(BNO055_QUATERNION_DATA_W_LSB_REG, buffer, 8u) == TRUE) {
+        StoreQuaternion(buffer, rawQuaternion);
+    } else {
+        lastReadOk = FALSE;
+    }
+    if (BNO055Read8(BNO055_CALIB_STAT_REG, &rawCalib) != TRUE) {
+        lastReadOk = FALSE;
+    }
+    if (BNO055Read8(BNO055_TEMP_REG, &rawTempC) != TRUE) {
+        lastReadOk = FALSE;
+    }
+    if (BNO055Read8(BNO055_ST_RESULT_REG, &rawSelfTest) != TRUE) {
+        lastReadOk = FALSE;
+    }
+    if (BNO055Read8(BNO055_SYS_STATUS_REG, &rawSystemStatus) != TRUE) {
+        lastReadOk = FALSE;
+    }
+    if (BNO055Read8(BNO055_SYS_ERR_REG, &rawSystemError) != TRUE) {
+        lastReadOk = FALSE;
+    }
+    if (BNO055Read8(BNO055_OPR_MODE_REG, &rawOperationMode) != TRUE) {
+        lastReadOk = FALSE;
+    }
+#endif
+}
+
 void RobotIMU_PrintDebugSnapshot(void)
 {
 #if ROBOT_PLUGPLAY_USE_BNO055
+    RobotIMU_UpdateDebugData();
     printf("\r\n[IMU] BNO055 @0x%02X ready=%u readOk=%u mode=0x%02X%s selftest=0x%02X sys=%u err=%u temp=%uC\r\n",
             bnoAddress,
             (unsigned int) imuReady,
@@ -668,6 +649,7 @@ uint8_t RobotIMU_EnsureNDOF(void)
     if (lastModeWasNDOF == TRUE) {
         RobotIMU_ZeroPositionVelocity();
         lastUpdateMs = ES_Timer_GetTime();
+        lastModeCheckMs = lastUpdateMs;
     }
     return lastModeWasNDOF;
 #else
