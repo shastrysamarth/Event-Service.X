@@ -78,6 +78,7 @@ typedef enum {
     BENCH_SENSOR_BUMP_RR,
     BENCH_SENSOR_BUMP_RL,
     BENCH_SENSOR_BEACON,
+    BENCH_SENSOR_IMU_GYRO,
     BENCH_SENSOR_COUNT,
 } BenchSensor_t;
 
@@ -115,6 +116,7 @@ static uint8_t benchMotorSequenceStep = 0u;
 static uint16_t activeSensorMask = 0u;
 static char activeDriveCommandKey = '\0';
 static uint32_t benchSampleSeq = 0u;
+static uint32_t benchGyroAccumLastMs = 0u;
 
 
 void RobotTestHarness_RunMotorSensorBench(void)
@@ -165,7 +167,7 @@ static void BenchPrintHelp(void)
     printf("[BENCH] no sensor streaming at startup\r\n");
     printf("[BENCH] enabled streams print every loop pass (n=seq) to show read rate\r\n");
     printf("[BENCH] ? help, ! hardware pin map, . print active sensors once\r\n");
-    printf("[IMU] I print one BNO055/gyro snapshot\r\n");
+    printf("[IMU] I toggle gyro stream (x/y/z dps, heading rate, accum deg)\r\n");
     printf("[SENSOR] toggle streams: t/y/u/i/o tape 1/2/3/4/5\r\n");
     printf("[SENSOR] toggle streams: f/g/h/j bump FR/FL/RR/RL, b beacon\r\n");
     printf("[SENSOR] p toggle all sensors, l turn all sensor streams off\r\n");
@@ -212,8 +214,7 @@ static uint8_t BenchHandleSensorKey(char key)
         BenchPrintActiveSensors();
         return TRUE;
     case 'I':
-        RobotIMU_Update();
-        RobotIMU_PrintDebugSnapshot();
+        BenchToggleSensor(BENCH_SENSOR_IMU_GYRO, "imuGyro");
         return TRUE;
     case 'p':
         activeSensorMask = (activeSensorMask == BENCH_SENSOR_ALL_MASK) ? 0u :
@@ -268,6 +269,11 @@ static void BenchToggleSensor(BenchSensor_t sensor, const char *name)
     printf("[SENSOR] %s stream %s\r\n", name,
             (activeSensorMask & mask) ? "ON" : "OFF");
     if (activeSensorMask & mask) {
+        if (sensor == BENCH_SENSOR_IMU_GYRO) {
+            /* Zero the integrated angle so each enable starts a fresh sweep. */
+            RobotIMU_ResetGyroAccum();
+            benchGyroAccumLastMs = TIMERS_GetTime();
+        }
         BenchPrintSensor(sensor);
     }
 }
@@ -598,6 +604,14 @@ static void BenchPrintSensor(BenchSensor_t sensor)
     case BENCH_SENSOR_BEACON:
         BenchPrintBeacon();
         break;
+    case BENCH_SENSOR_IMU_GYRO: {
+        uint32_t nowMs = TIMERS_GetTime();
+        RobotIMU_Update();
+        RobotIMU_AccumulateGyro(nowMs - benchGyroAccumLastMs);
+        benchGyroAccumLastMs = nowMs;
+        RobotIMU_PrintGyroSnapshot();
+        break;
+    }
     default:
         break;
     }

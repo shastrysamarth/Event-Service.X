@@ -1,5 +1,7 @@
 #include "NavigateToISZSubHSM.h"
 
+#include <stdio.h>
+
 #include "AlignSubHSM.h"
 #include "ES_Framework.h"
 #include "RobotDebug.h"
@@ -9,6 +11,12 @@
 #include "RobotPins.h"
 #include "RobotPlugPlay.h"
 #include "RobotSensors.h"
+
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_CHATTY_LOGS
+#define NAV_TRACE(...) printf(__VA_ARGS__)
+#else
+#define NAV_TRACE(...) ((void) 0)
+#endif
 
 typedef enum {
     InitPSubState,
@@ -61,7 +69,6 @@ static uint8_t IsTop(void);
 static uint8_t IsBottom(void);
 static uint8_t IsAlignableState(NavigateState_t state);
 static AlignMode_t AlignModeForState(NavigateState_t state);
-static uint8_t TapeChangedHasOffEvent(ES_Event event);
 static uint8_t TapeRising(ES_Event event, uint8_t mask);
 static uint8_t BumpRising(ES_Event event, uint8_t mask);
 static uint8_t BumpFalling(ES_Event event, uint8_t mask);
@@ -96,6 +103,17 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     ES_Tattle();
     ROBOT_DEBUG_STATE("NavigateToISZ", StateNames[CurrentState], ThisEvent);
 
+#if defined(DEBUG) || defined(ROBOT_DEBUG)
+    if ((ThisEvent.EventType != ES_ENTRY) && (ThisEvent.EventType != ES_EXIT) &&
+            (ThisEvent.EventType != ES_INIT) &&
+            (ThisEvent.EventType != ES_NO_EVENT)) {
+        NAV_TRACE("[NAV] evt=%s param=0x%X state=%s\r\n",
+                EventNames[ThisEvent.EventType],
+                (unsigned int) ThisEvent.EventParam,
+                StateNames[CurrentState]);
+    }
+#endif
+
     if (HandleAlignTriggerEvent(&ThisEvent, &nextState, &makeTransition) == FALSE) {
     switch (CurrentState) {
     case InitPSubState:
@@ -123,6 +141,13 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
                 nextState = Reverse1State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
+            } else {
+                /* Keep driving toward the corner. We only command the motor on
+                 * ES_ENTRY, so any transient stop (e.g. an align hand-off or an
+                 * out-of-order command) would otherwise leave us frozen on the
+                 * tape forever. Re-asserting here is a no-op while already
+                 * strafing (RobotMotion dedups identical commands). */
+                RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             }
             break;
         case MisalignedEvent:
@@ -149,6 +174,9 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
                 nextState = Reverse1State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
+            } else {
+                /* Re-assert strafe so a transient stop cannot freeze us. */
+                RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             }
             break;
         case MisalignedEvent:
@@ -477,7 +505,13 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case AlignState:
         ThisEvent = RunAlignSubHSM(ThisEvent);
         if (ThisEvent.EventType == RealignedEvent) {
+            /* Align is done: cancel the shared sweep timer so a stale timeout
+             * cannot fire after we hand control back to the strafe/drive state. */
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
             AcceptCurrentAlignment(ThisEvent.EventParam);
+            NAV_TRACE("[NAV] align-done -> %s (src=%u)\r\n",
+                    StateNames[returnStateAfterAlign],
+                    (unsigned int) ThisEvent.EventParam);
             nextState = returnStateAfterAlign;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -622,19 +656,6 @@ static AlignMode_t AlignModeForState(NavigateState_t state)
     }
 }
 
-static uint8_t TapeChangedHasOffEvent(ES_Event event)
-{
-    uint8_t currentMask;
-    uint8_t changedMask;
-
-    if (event.EventType != TapeChangedEvent) {
-        return FALSE;
-    }
-    currentMask = TAPE_EVENT_CURRENT_MASK(event.EventParam);
-    changedMask = TAPE_EVENT_CHANGED_MASK(event.EventParam);
-    return ((changedMask & (uint8_t) ~currentMask) != 0u) ? TRUE : FALSE;
-}
-
 static uint8_t TapeRising(ES_Event event, uint8_t mask)
 {
     uint8_t currentMask;
@@ -694,14 +715,14 @@ static uint8_t HandleAlignTriggerEvent(ES_Event *event,
     }
 
     if (mode == ALIGN_MODE_TAPE) {
-        if ((event->EventType == ES_ENTRY) && (TapeAlignNeededNow() == TRUE)) {
-            BeginAlignForState(CurrentState);
-            *nextState = AlignState;
-            *makeTransition = TRUE;
-            event->EventType = ES_NO_EVENT;
-            return TRUE;
-        }
-        if (TapeChangedHasOffEvent(*event) == TRUE) {
+        /* Only divert to a tape-align when the robot is genuinely off the line
+         * (>=2 of the relevant sensors off). That is exactly the condition the
+         * branch selector can act on (it needs a sensor PAIR off). A single
+         * sensor blinking off while we strafe across the line must NOT trigger
+         * an align that TapeWaitOffState cannot resolve. */
+        if (((event->EventType == ES_ENTRY) ||
+                (event->EventType == TapeChangedEvent)) &&
+                (TapeAlignNeededNow() == TRUE)) {
             BeginAlignForState(CurrentState);
             *nextState = AlignState;
             *makeTransition = TRUE;
@@ -757,6 +778,16 @@ static void BeginAlignForState(NavigateState_t state)
 
     returnStateAfterAlign = state;
     RobotMotion_PauseDistanceMove();
+    NAV_TRACE("[NAV] align-start from=%s mode=%s axis=%s "
+            "tape s1=%d s2=%d s3=%d s4=%d s5=%d\r\n",
+            StateNames[state],
+            (mode == ALIGN_MODE_TAPE) ? "tape" : "gyro",
+            (movement_axis == MOVEMENT_AXIS_VERTICAL) ? "V" : "H",
+            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_1),
+            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_2),
+            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_3),
+            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_4),
+            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_5));
     if (mode == ALIGN_MODE_TAPE) {
         InitTapeAlignSubHSM(movement_axis, x_ref, y_ref);
     } else {
@@ -772,8 +803,6 @@ static void AcceptCurrentAlignment(uint16_t sourceParam)
         x_ref = RobotIMU_GetXInches();
         y_ref = RobotIMU_GetYInches();
     }
-    /* Heading offset always refreshed after align (sensor or harness). */
-    RobotIMU_ZeroHeading();
     RobotMotion_ResumeDistanceMove();
 }
 

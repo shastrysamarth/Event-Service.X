@@ -25,6 +25,13 @@ float RobotIMU_GetXAccelIPS2(void);
 float RobotIMU_GetYAccelIPS2(void);
 float RobotIMU_GetZGyroDPS(void);
 void RobotIMU_PrintDebugSnapshot(void);
+/* Gyro-only snapshot (raw X/Y/Z deg/s, heading-axis rate, and integrated
+ * angle). Caller refreshes the data via RobotIMU_Update() first. */
+void RobotIMU_PrintGyroSnapshot(void);
+/* Integrate the latest gyro rates over dtMs into the per-axis accumulated
+ * angle (deg). Reset the running total with RobotIMU_ResetGyroAccum(). */
+void RobotIMU_AccumulateGyro(uint32_t dtMs);
+void RobotIMU_ResetGyroAccum(void);
 void RobotIMU_SetDebugStream(uint8_t enabled);
 void RobotIMU_ToggleDebugStream(void);
 uint8_t RobotIMU_IsDebugStreamEnabled(void);

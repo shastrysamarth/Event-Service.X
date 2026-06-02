@@ -666,6 +666,7 @@ static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape)
 
 static void LogTapeMask(uint8_t tapeMask, uint8_t changedMask)
 {
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_CHATTY_LOGS
     printf("[TAPE] change mask=0x%02X changed=0x%02X "
            "s1=%s s2=%s s3=%s s4=%s s5=%s\r\n",
            (unsigned int)tapeMask,
@@ -675,6 +676,10 @@ static void LogTapeMask(uint8_t tapeMask, uint8_t changedMask)
            (tapeMask & TAPE_SENSOR_3_MASK) ? "ON " : "off",
            (tapeMask & TAPE_SENSOR_4_MASK) ? "ON " : "off",
            (tapeMask & TAPE_SENSOR_5_MASK) ? "ON " : "off");
+#else
+    (void) tapeMask;
+    (void) changedMask;
+#endif
 }
 
 static void LogTapeSample(const uint8_t raw[5], const uint8_t onTape[5])

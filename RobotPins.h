@@ -6,6 +6,10 @@
 #include "RC_Servo.h"
 #include "pwm.h"
 
+#ifndef ROBOT_CHATTY_LOGS
+#define ROBOT_CHATTY_LOGS 1
+#endif
+
 #define CHASSIS_WIDTH_IN 10.0f
 #define CHASSIS_LENGTH_IN 10.0f
 #define ROBOT_HALF_WIDTH_IN (CHASSIS_WIDTH_IN / 2.0f)
@@ -32,7 +36,7 @@
 #define POSITION_THRESHOLD_IN 0.75f
 #define HEADING_THRESHOLD_DEG 3.0f
 #define TAPE_ALIGN_HEADING_STRAIGHT_DEG 1.5f
-#define TAPE_ALIGN_SWEEP_TIMER_MS 500u
+#define TAPE_ALIGN_SWEEP_TIMER_MS 300u
 /* Small deadband on accel used for integration (LSB ≈ 0.01 m/s²). */
 #define IMU_ACCEL_INTEGRATE_DEADBAND_RAW 8
 /* "Still" uses raw linear accel before integrate deadband (same LSB scale). */
@@ -47,6 +51,14 @@
 #define ALIGN_STABLE_SAMPLE_COUNT 3u
 #ifndef ROBOT_REALTIME_TRACE
 #define ROBOT_REALTIME_TRACE 0
+#endif
+/* Master switch for the high-rate per-event trace logs: [STATE] entries,
+ * [MOTOR] control changes, [TAPE] change masks, and [NAV] traces. These print
+ * on every event and can back up the UART / event queues and slow sensor
+ * sampling. Set to 0 to silence them (one-shot init + snapshot logs still obey
+ * ROBOT_DEBUG); set to 1 to restore the verbose tracing while debugging. */
+#ifndef ROBOT_CHATTY_LOGS
+#define ROBOT_CHATTY_LOGS 0
 #endif
 /* RealignedEvent EventParam: sensor path runs IMU zero + ref re-anchor in Navigate. */
 #define ALIGN_REALIGNED_SOURCE_MANUAL (0u)

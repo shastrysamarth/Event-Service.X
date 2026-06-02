@@ -6,7 +6,10 @@
 
 uint8_t RobotMotion_Init(void);
 
-void RobotMotion_Stop(void);
+/* Implementation; call via the RobotMotion_Stop() macro below so the debug
+ * "[MOTOR] control change ... (stop by <fn>)" line records who issued the stop. */
+void RobotMotion_StopImpl(const char *caller);
+#define RobotMotion_Stop() RobotMotion_StopImpl(__func__)
 void RobotMotion_Forward(float speedIPS);
 void RobotMotion_Reverse(float speedIPS);
 void RobotMotion_StrafeRight(float speedIPS);

@@ -139,6 +139,13 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
             branch = SelectReadyTapeBranch();
             if (branch != (const TapeAlignBranch_t *) 0) {
                 makeTransition = StartTapeBranch(branch, &nextState);
+            } else {
+                /* No sensor pair is off, so there is nothing this align can
+                 * correct. Do NOT sit here with the drive stopped: report
+                 * aligned immediately so the caller resumes its motion. */
+                RobotMotion_Stop();
+                ThisEvent.EventType = RealignedEvent;
+                ThisEvent.EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
             }
             break;
         case TapeChangedEvent:

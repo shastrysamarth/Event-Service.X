@@ -35,6 +35,10 @@ static const char *lastMotionPivot = "none";
  * pointers is enough to detect a transition. */
 static const char *prevLoggedCommand = "Init";
 static const char *prevLoggedPivot = "none";
+/* Caller name passed to the most recent RobotMotion_Stop(); consumed (and
+ * cleared) by LogMotionChange so the "[MOTOR] ... (stop by <fn>)" line shows
+ * exactly which function commanded the stop. */
+static const char *stopCaller = (const char *) 0;
 static float lastFrontLeftIPS = 0.0f;
 static float lastFrontRightIPS = 0.0f;
 static float lastRearLeftIPS = 0.0f;
@@ -70,14 +74,28 @@ static void LogMotionChange(void);
  * last in EVENT_CHECK_LIST and gets starved while sensors keep posting). */
 static void LogMotionChange(void)
 {
+    const char *caller = stopCaller;
+
+    /* Consume the pending stop attribution every call so a deduped stop can't
+     * leak its caller onto a later, unrelated command transition. */
+    stopCaller = (const char *) 0;
+
     if ((lastMotionCommand == prevLoggedCommand) &&
             (lastMotionPivot == prevLoggedPivot)) {
         return;
     }
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
-    printf("[MOTOR] control change: %s/%s -> %s/%s\r\n",
-            prevLoggedCommand, prevLoggedPivot,
-            lastMotionCommand, lastMotionPivot);
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_CHATTY_LOGS
+    if (caller != (const char *) 0) {
+        printf("[MOTOR] control change: %s/%s -> %s/%s (stop by %s)\r\n",
+                prevLoggedCommand, prevLoggedPivot,
+                lastMotionCommand, lastMotionPivot, caller);
+    } else {
+        printf("[MOTOR] control change: %s/%s -> %s/%s\r\n",
+                prevLoggedCommand, prevLoggedPivot,
+                lastMotionCommand, lastMotionPivot);
+    }
+#else
+    (void) caller;
 #endif
     prevLoggedCommand = lastMotionCommand;
     prevLoggedPivot = lastMotionPivot;
@@ -101,8 +119,9 @@ uint8_t RobotMotion_Init(void)
     return ok;
 }
 
-void RobotMotion_Stop(void)
+void RobotMotion_StopImpl(const char *caller)
 {
+    stopCaller = (caller != (const char *) 0) ? caller : "?";
     lastMotionCommand = "stop";
     lastMotionPivot = "none";
     LogMotionChange();

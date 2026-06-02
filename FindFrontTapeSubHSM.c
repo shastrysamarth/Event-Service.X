@@ -247,7 +247,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case TurnRightState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
+            if ((RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) && (RobotSensors_IsTapeOn(TAPE_SENSOR_3) == TRUE)) {
                 RobotMotion_Stop();
                 PostFoundFrontTape();
                 ThisEvent.EventType = ES_NO_EVENT;
@@ -289,7 +289,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case TurnLeftState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
+            if ((RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) && (RobotSensors_IsTapeOn(TAPE_SENSOR_4) == TRUE)) {
                 RobotMotion_Stop();
                 PostFoundFrontTape();
                 ThisEvent.EventType = ES_NO_EVENT;

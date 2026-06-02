@@ -55,6 +55,9 @@ static float xAccelIPS2 = 0.0f;
 static float yAccelIPS2 = 0.0f;
 /* Compatibility getter name kept; value follows BNO055_HEADING_AXIS. */
 static float zGyroDPS = 0.0f;
+/* Open-loop integrated gyro angle per axis (deg), driven by callers via
+ * RobotIMU_AccumulateGyro(); used by the bench gyro stream. */
+static float gyroAccumDeg[3] = {0.0f, 0.0f, 0.0f};
 static uint32_t lastUpdateMs = 0;
 static uint32_t lastModeCheckMs = 0;
 static uint16_t stationaryMs = 0u;
@@ -588,6 +591,49 @@ void RobotIMU_PrintDebugSnapshot(void)
     printf(" in/s\r\n");
 #else
     printf("\r\n[IMU] BNO055 disabled\r\n");
+#endif
+}
+
+void RobotIMU_ResetGyroAccum(void)
+{
+    gyroAccumDeg[0] = 0.0f;
+    gyroAccumDeg[1] = 0.0f;
+    gyroAccumDeg[2] = 0.0f;
+}
+
+void RobotIMU_AccumulateGyro(uint32_t dtMs)
+{
+#if ROBOT_PLUGPLAY_USE_BNO055
+    float dtSec = ((float) dtMs) / 1000.0f;
+
+    gyroAccumDeg[0] += (((float) rawGyro[0]) / 16.0f) * dtSec;
+    gyroAccumDeg[1] += (((float) rawGyro[1]) / 16.0f) * dtSec;
+    gyroAccumDeg[2] += (((float) rawGyro[2]) / 16.0f) * dtSec;
+#else
+    (void) dtMs;
+#endif
+}
+
+void RobotIMU_PrintGyroSnapshot(void)
+{
+#if ROBOT_PLUGPLAY_USE_BNO055
+    printf("[IMU] gyro x/y/z=");
+    PrintFixedQ4(rawGyro[0]);
+    printf("/");
+    PrintFixedQ4(rawGyro[1]);
+    printf("/");
+    PrintFixedQ4(rawGyro[2]);
+    printf(" dps headingRate=");
+    PrintFloat100(zGyroDPS);
+    printf(" dps accum x/y/z=");
+    PrintFloat100(gyroAccumDeg[0]);
+    printf("/");
+    PrintFloat100(gyroAccumDeg[1]);
+    printf("/");
+    PrintFloat100(gyroAccumDeg[2]);
+    printf(" deg\r\n");
+#else
+    printf("[IMU] BNO055 disabled\r\n");
 #endif
 }
 
