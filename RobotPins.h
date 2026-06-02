@@ -39,6 +39,13 @@
 #define HEADING_THRESHOLD_DEG 3.0f
 #define TAPE_ALIGN_HEADING_STRAIGHT_DEG 1.5f
 #define TAPE_ALIGN_SWEEP_TIMER_MS 300u
+/* Tape align heading-correction turn slice: motors stall below ~4 IPS, so the
+ * heading is squared in short pulse/rest cycles instead of a continuous turn. */
+#define ALIGN_MOTION_PULSE_MS 100u
+/* Tape align search sweep: first run is START ms, then each direction reversal
+ * grows the run by STEP ms (widening back/forth search for the tape-5 edge). */
+#define ALIGN_TIMER_START_MS 100u
+#define ALIGN_TIMER_STEP_MS 100u
 /* Small deadband on accel used for integration (LSB ≈ 0.01 m/s²). */
 #define IMU_ACCEL_INTEGRATE_DEADBAND_RAW 8
 /* "Still" uses raw linear accel before integrate deadband (same LSB scale). */
@@ -183,7 +190,7 @@
  * 1.65V sits near ADC 512 past 16 ft, and 3.0V sits near ADC 930 below 6 ft.
  * [FLAG][#1] Replace the linear placeholder with measured calibration data
  * after testing the detector at 6 ft through 16 ft. */
-#define BEACON_AVERAGE_SAMPLE_COUNT 10u
+#define BEACON_AVERAGE_SAMPLE_COUNT 50u
 #define BEACON_DISTANCE_UNKNOWN_FT 0u
 #define BEACON_DISTANCE_MIN_FT 6u
 #define BEACON_DISTANCE_MAX_FT 16u
@@ -228,7 +235,7 @@
  * #define SOLENOID_ON_ADC_THRESHOLD 700u
  * #define SOLENOID_ON_IS_HIGH 1
  */
-#define BEACON_ADC_DELTA 3u
+#define BEACON_ADC_DELTA 10u
 
 /*
  * L298N H-bridge 1 controls front motors:

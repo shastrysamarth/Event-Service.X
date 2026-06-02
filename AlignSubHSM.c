@@ -20,102 +20,101 @@
 #define ALIGN_LOG_ENABLED 0
 #endif
 
+/* Tape align (rewritten again to catch corner cases):
+ *
+ *  Entered when center sensor 5 leaves the line. The robot runs a widening
+ *  back-and-forth sweep along one axis to put sensor 5 back on the line, and
+ *  also watches for the "corner" sensor so it can tell NavigateToISZ when the
+ *  perpendicular line has been reached.
+ *
+ *  Entry first squares the heading: TapeHeadingAlignState jitter-turns about
+ *  center (left for positive error, right for negative) in 100 ms drive /
+ *  100 ms active-brake pulses until |error| <= TAPE_ALIGN_HEADING_STRAIGHT_DEG.
+ *  The heading is measured against the latched global reference and is NEVER
+ *  zeroed here. Once straight, align_timer is reset to 100 ms and control drops
+ *  into the movement-axis branches (or completes if tape 5 is already on).
+ *
+ *  Per axis / boundary the directions and corner sensor are:
+ *      horizontal      : primary reverse,      secondary forward,      corner 2
+ *      vertical TOP     : primary strafe right, secondary strafe left, corner 4
+ *      vertical BOTTOM  : primary strafe left,  secondary strafe right, corner 3
+ *
+ *  PRIMARY (run alignTimerMs, then += STEP):
+ *      corner-seen AND tape 5 on  -> Realigned (+ corner edge)
+ *      tape 5 OFF edge            -> Jitter (pulse the secondary direction)
+ *      timeout                    -> Secondary
+ *  SECONDARY (run alignTimerMs, then += STEP):
+ *      tape 5 ON edge             -> Realigned (+ corner edge)
+ *      timeout                    -> Primary
+ *  JITTER (secondary direction, 100 ms drive / 100 ms active-brake pulses):
+ *      tape 5 ON edge             -> Realigned (+ corner edge)
+ *
+ *  Corner edge: events only fire on tape transitions, so a corner sensor that
+ *  rises while align owns the drive would never re-notify the nav state. We
+ *  sample the corner sensor on align entry and again on align exit; if it was
+ *  off on entry and on at exit we synthesize a TapeChangedEvent rising edge and
+ *  post it to the top so the returned-to nav state can switch strafe -> reverse.
+ *
+ *  GYRO mode (ShootingSubHSM and gyro nav states) is unchanged and driven
+ *  continuously by AlignSubHSM_UpdateControl(). */
 typedef enum {
     InitPAlignState,
     GyroHeadingAlignState,
-    TapeWaitOffState,
-    TapeTurnLeftState,
-    TapeTurnRightState,
-    /* Heading-straight branch: pivot left about center until an edge sensor
-     * (3/4 horizontal, 1/2 vertical) finds the line, then translate so center
-     * sensor 5 lands on the line. Replaces the old timed left/right sweep. */
-    TapeStraightPivotState,
-    TapeStraightTranslateState,
+    TapeHeadingAlignState,
+    TapeSearchPrimaryState,
+    TapeSearchSecondaryState,
+    TapeJitterState,
 } AlignState_t;
-
-/* Translate direction chosen once an edge sensor finds the line, used to bring
- * center sensor 5 onto the line in the heading-straight branch. */
-typedef enum {
-    STRAIGHT_TRANSLATE_NONE,
-    STRAIGHT_TRANSLATE_FORWARD,
-    STRAIGHT_TRANSLATE_REVERSE,
-    STRAIGHT_TRANSLATE_STRAFE_LEFT,
-    STRAIGHT_TRANSLATE_STRAFE_RIGHT,
-} StraightTranslate_t;
-
-/* Result of re-evaluating the heading-straight pivot from live tape readings. */
-typedef enum {
-    STRAIGHT_KEEP_PIVOT,
-    STRAIGHT_GO_TRANSLATE,
-    STRAIGHT_DONE,
-} StraightDecision_t;
-
-typedef struct {
-    uint8_t sensorA;
-    uint8_t sensorB;
-    uint8_t pivotSensor;
-    uint8_t realignMask;
-} TapeAlignBranch_t;
 
 static const char *StateNames[] = {
     "InitPAlignState",
     "GyroHeadingAlignState",
-    "TapeWaitOffState",
-    "TapeTurnLeftState",
-    "TapeTurnRightState",
-    "TapeStraightPivotState",
-    "TapeStraightTranslateState",
-};
-
-static const TapeAlignBranch_t VerticalBranches[] = {
-    {1u, 2u, 5u, TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK},
-    {1u, 5u, 2u, TAPE_SENSOR_5_MASK},
-    {2u, 5u, 1u, TAPE_SENSOR_5_MASK},
-};
-
-static const TapeAlignBranch_t HorizontalBranches[] = {
-    {3u, 4u, 5u, TAPE_SENSOR_3_MASK | TAPE_SENSOR_4_MASK},
-    {3u, 5u, 4u, TAPE_SENSOR_5_MASK},
-    {4u, 5u, 3u, TAPE_SENSOR_5_MASK},
+    "TapeHeadingAlignState",
+    "TapeSearchPrimaryState",
+    "TapeSearchSecondaryState",
+    "TapeJitterState",
 };
 
 static AlignState_t CurrentState = InitPAlignState;
 static AlignMode_t alignMode = ALIGN_MODE_GYRO;
 static MovementAxis_t alignAxis = MOVEMENT_AXIS_HORIZONTAL;
+static BoundaryChoice_t alignBoundary = BOUNDARY_TOP;
 static float xRef = 0.0f;
 static float yRef = 0.0f;
 static uint8_t headingAlignedSamples = 0u;
-static uint8_t tapeOffFlags = 0u;
-static TapeAlignBranch_t activeTapeBranch = {
-    1u, 2u, 5u,
-    TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK
-};
-static StraightTranslate_t straightTranslateDir = STRAIGHT_TRANSLATE_NONE;
+/* Current search-run length (ms); grows by ALIGN_TIMER_STEP_MS each reversal. */
+static uint16_t alignTimerMs = ALIGN_TIMER_START_MS;
+/* Tape sensor mask sampled when align started, used to detect a corner-sensor
+ * rising edge between entry and exit. */
+static uint8_t tapeEntryMask = 0u;
+/* Corner sensor for the active axis/boundary (2 horizontal, 4 top, 3 bottom). */
+static uint8_t cornerSensor = 2u;
+/* Latched TRUE once the corner sensor has been seen on during the primary run. */
+static uint8_t cornerSeen = FALSE;
+/* Jitter alternates a drive pulse and an active-brake pulse. */
+static uint8_t jitterBraking = FALSE;
 #if ALIGN_LOG_ENABLED
-/* Last commanded turn direction we logged, so [ALIGN] prints only on a change
- * (UpdateControl runs every checker cycle while aligning). Stable literals, so
- * pointer comparison is enough. */
+/* Last commanded action we logged, so [ALIGN] prints only on a change. Stable
+ * string literals, so pointer comparison is enough. */
 static const char *lastAlignAction = "none";
 #endif
 
 static uint8_t InitAlignCommon(AlignMode_t mode, MovementAxis_t axis,
-        float xRefInches, float yRefInches);
+        BoundaryChoice_t boundary, float xRefInches, float yRefInches);
 static float AbsFloat(float value);
 static uint8_t StableCheck(uint8_t inThreshold, uint8_t *sampleCounter);
 static uint8_t TapeMaskForSensor(uint8_t sensorNumber);
-static uint8_t TapeOffMaskForBranch(const TapeAlignBranch_t *branch);
-static const TapeAlignBranch_t *SelectReadyTapeBranch(void);
-static uint8_t StartTapeBranch(const TapeAlignBranch_t *branch,
-        AlignState_t *nextState);
-static AlignState_t TapeTurnStateForHeading(void);
-static void RefreshTapeOffFlagsFromHardware(void);
-static uint8_t UpdateTapeFlagsFromChangedMask(uint8_t currentMask,
-        uint8_t changedMask);
-static uint8_t CompleteIfRealignedTapeOn(ES_Event *event);
-static TurnPivot_t PivotForTapeSensor(uint8_t sensorNumber);
-static void DriveTapeTurn(uint8_t turnLeft);
-static StraightDecision_t EvaluateStraightPivot(void);
-static void DriveStraightTranslate(void);
+static uint8_t LiveTapeMask(void);
+static uint8_t CornerIsOn(void);
+static uint8_t CenterTapeIsOn(void);
+static uint8_t Tape5Edge(ES_Event event, uint8_t wantOn);
+static uint8_t CornerSensorForAlign(void);
+static uint8_t TapeHeadingIsStraight(void);
+static void IssueTapeHeadingTurn(void);
+static void IssueTapeSearchMotion(uint8_t primary);
+static void IssueTapeJitterMotion(void);
+static void EnterTapeSearch(uint8_t primary);
+static void CompleteTapeRealign(ES_Event *event);
 static void PrintFixedDeg(float value);
 static void LogAlignAction(const char *action, float headingErrDeg);
 
@@ -126,19 +125,19 @@ uint8_t InitAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches)
 
 uint8_t InitGyroAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches)
 {
-    return InitAlignCommon(ALIGN_MODE_GYRO, axis, xRefInches, yRefInches);
+    return InitAlignCommon(ALIGN_MODE_GYRO, axis, BOUNDARY_TOP, xRefInches, yRefInches);
 }
 
-uint8_t InitTapeAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches)
+uint8_t InitTapeAlignSubHSM(MovementAxis_t axis, BoundaryChoice_t boundary,
+        float xRefInches, float yRefInches)
 {
-    return InitAlignCommon(ALIGN_MODE_TAPE, axis, xRefInches, yRefInches);
+    return InitAlignCommon(ALIGN_MODE_TAPE, axis, boundary, xRefInches, yRefInches);
 }
 
 ES_Event RunAlignSubHSM(ES_Event ThisEvent)
 {
     uint8_t makeTransition = FALSE;
     AlignState_t nextState = CurrentState;
-    const TapeAlignBranch_t *branch;
 
     ES_Tattle();
     ROBOT_DEBUG_STATE("Align", StateNames[CurrentState], ThisEvent);
@@ -147,7 +146,7 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
     case InitPAlignState:
         if (ThisEvent.EventType == ES_INIT) {
             nextState = (alignMode == ALIGN_MODE_TAPE) ?
-                    TapeWaitOffState : GyroHeadingAlignState;
+                    TapeHeadingAlignState : GyroHeadingAlignState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
         }
@@ -170,87 +169,101 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
         }
         break;
 
-    case TapeWaitOffState:
+    case TapeHeadingAlignState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RefreshTapeOffFlagsFromHardware();
-            branch = SelectReadyTapeBranch();
-            if (branch != (const TapeAlignBranch_t *) 0) {
-                makeTransition = StartTapeBranch(branch, &nextState);
-            } else {
-                /* No sensor pair is off, so there is nothing this align can
-                 * correct. Do NOT sit here with the drive stopped: report
-                 * aligned immediately so the caller resumes its motion. */
+            jitterBraking = FALSE;
+            if (TapeHeadingIsStraight() == TRUE) {
+                /* Heading already squared: start the sweep right away. */
                 RobotMotion_Stop();
-                ThisEvent.EventType = RealignedEvent;
-                ThisEvent.EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
+                alignTimerMs = ALIGN_TIMER_START_MS;
+                nextState = TapeSearchPrimaryState;
+                makeTransition = TRUE;
+            } else {
+                IssueTapeHeadingTurn();
+                ES_Timer_InitTimer(NAV_SETTLE_TIMER, ALIGN_MOTION_PULSE_MS);
             }
             break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
         case TapeChangedEvent:
-            if (UpdateTapeFlagsFromChangedMask(
-                    TAPE_EVENT_CURRENT_MASK(ThisEvent.EventParam),
-                    TAPE_EVENT_CHANGED_MASK(ThisEvent.EventParam)) == TRUE) {
-                branch = SelectReadyTapeBranch();
-                if (branch != (const TapeAlignBranch_t *) 0) {
-                    makeTransition = StartTapeBranch(branch, &nextState);
-                }
-            }
+            /* Heading squaring ignores tape edges; the sweep handles tape 5. */
             ThisEvent.EventType = ES_NO_EVENT;
             break;
-        default:
-            break;
-        }
-        break;
-
-    case TapeTurnLeftState:
-    case TapeTurnRightState:
-        switch (ThisEvent.EventType) {
-        case ES_ENTRY:
-            AlignSubHSM_UpdateControl();
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                if (jitterBraking == FALSE) {
+                    /* End the turn pulse with an active brake, then rest so the
+                     * heading reading settles before we re-evaluate it. */
+                    RobotMotion_Stop();
+                    jitterBraking = TRUE;
+                    ES_Timer_InitTimer(NAV_SETTLE_TIMER, ALIGN_MOTION_PULSE_MS);
+                    ThisEvent.EventType = ES_NO_EVENT;
+                } else {
+                    jitterBraking = FALSE;
+                    if (TapeHeadingIsStraight() == TRUE) {
+                        if (CenterTapeIsOn() == TRUE) {
+                            /* Squared and already on the line: nothing to sweep. */
+                            CompleteTapeRealign(&ThisEvent);
+                        } else {
+                            alignTimerMs = ALIGN_TIMER_START_MS;
+                            nextState = TapeSearchPrimaryState;
+                            makeTransition = TRUE;
+                            ThisEvent.EventType = ES_NO_EVENT;
+                        }
+                    } else {
+                        IssueTapeHeadingTurn();
+                        ES_Timer_InitTimer(NAV_SETTLE_TIMER, ALIGN_MOTION_PULSE_MS);
+                        ThisEvent.EventType = ES_NO_EVENT;
+                    }
+                }
+            }
             break;
         case RealignedEvent:
             RobotMotion_Stop();
             ThisEvent.EventType = RealignedEvent;
             break;
         default:
-            /* CompleteIfRealignedTapeOn consumes TapeChangedEvent: it updates
-             * the off-flags and either completes (RealignedEvent) or clears the
-             * event. Non-tape events pass through unchanged. */
-            (void) CompleteIfRealignedTapeOn(&ThisEvent);
             break;
         }
         break;
 
-    case TapeStraightPivotState:
+    case TapeSearchPrimaryState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            /* An edge sensor may already be on the line (e.g. the 3+5 / 4+5
-             * off pairs leave the other edge sensor reading tape), so try to
-             * pick a translate direction right away; otherwise pivot left. */
-            if (EvaluateStraightPivot() == STRAIGHT_GO_TRANSLATE) {
-                nextState = TapeStraightTranslateState;
-                makeTransition = TRUE;
-            } else {
-                AlignSubHSM_UpdateControl();
+            if (CornerIsOn() == TRUE) {
+                cornerSeen = TRUE;
             }
+            EnterTapeSearch(TRUE);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
             break;
         case TapeChangedEvent: {
-            StraightDecision_t decision = EvaluateStraightPivot();
-            if (decision == STRAIGHT_GO_TRANSLATE) {
-                nextState = TapeStraightTranslateState;
+            uint8_t currentMask = TAPE_EVENT_CURRENT_MASK(ThisEvent.EventParam);
+            if ((currentMask & TapeMaskForSensor(cornerSensor)) != 0u) {
+                cornerSeen = TRUE;
+            }
+            if ((cornerSeen == TRUE) &&
+                    ((currentMask & TAPE_SENSOR_5_MASK) != 0u)) {
+                CompleteTapeRealign(&ThisEvent);
+            } else if (Tape5Edge(ThisEvent, FALSE) == TRUE) {
+                nextState = TapeJitterState;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
-            } else if (decision == STRAIGHT_DONE) {
-                /* Center sensor already found the line: nothing to translate. */
-                RobotMotion_Stop();
-                ThisEvent.EventType = RealignedEvent;
-                ThisEvent.EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
             } else {
-                AlignSubHSM_UpdateControl();
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
         }
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = TapeSearchSecondaryState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
         case RealignedEvent:
             RobotMotion_Stop();
             ThisEvent.EventType = RealignedEvent;
@@ -260,18 +273,66 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
         }
         break;
 
-    case TapeStraightTranslateState:
+    case TapeSearchSecondaryState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            AlignSubHSM_UpdateControl();
+            EnterTapeSearch(FALSE);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
             break;
         case TapeChangedEvent:
-            if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
-                RobotMotion_Stop();
-                ThisEvent.EventType = RealignedEvent;
-                ThisEvent.EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
+            if (Tape5Edge(ThisEvent, TRUE) == TRUE) {
+                CompleteTapeRealign(&ThisEvent);
             } else {
-                AlignSubHSM_UpdateControl();
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = TapeSearchPrimaryState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        case RealignedEvent:
+            RobotMotion_Stop();
+            ThisEvent.EventType = RealignedEvent;
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case TapeJitterState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            jitterBraking = FALSE;
+            IssueTapeJitterMotion();
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, ALIGN_MOTION_PULSE_MS);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
+        case TapeChangedEvent:
+            if (Tape5Edge(ThisEvent, TRUE) == TRUE) {
+                CompleteTapeRealign(&ThisEvent);
+            } else {
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                if (jitterBraking == FALSE) {
+                    /* End the drive pulse with an active brake, then rest. */
+                    RobotMotion_Stop();
+                    jitterBraking = TRUE;
+                } else {
+                    /* Brake pulse done: drive the next jitter step. */
+                    jitterBraking = FALSE;
+                    IssueTapeJitterMotion();
+                }
+                ES_Timer_InitTimer(NAV_SETTLE_TIMER, ALIGN_MOTION_PULSE_MS);
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
@@ -316,46 +377,32 @@ uint8_t AlignSubHSM_IsHeadingStage(void)
 
 uint8_t AlignSubHSM_IsTapeStage(void)
 {
-    return ((CurrentState == TapeWaitOffState) ||
-            (CurrentState == TapeTurnLeftState) ||
-            (CurrentState == TapeTurnRightState) ||
-            (CurrentState == TapeStraightPivotState) ||
-            (CurrentState == TapeStraightTranslateState)) ? TRUE : FALSE;
+    return ((CurrentState == TapeHeadingAlignState) ||
+            (CurrentState == TapeSearchPrimaryState) ||
+            (CurrentState == TapeSearchSecondaryState) ||
+            (CurrentState == TapeJitterState)) ? TRUE : FALSE;
 }
 
 void AlignSubHSM_UpdateControl(void)
 {
     float error;
 
-    switch (CurrentState) {
-    case GyroHeadingAlignState:
-        error = RobotIMU_GetHeadingErrorToRefDeg();
-        if (AbsFloat(error) <= HEADING_THRESHOLD_DEG) {
-            RobotMotion_Stop();
-            LogAlignAction("gyro-centered-stop", error);
-        } else if (error > 0.0f) {
-            RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
-            LogAlignAction("gyro-turn-left", error);
-        } else {
-            RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
-            LogAlignAction("gyro-turn-right", error);
-        }
-        break;
-    case TapeTurnLeftState:
-        DriveTapeTurn(TRUE);
-        break;
-    case TapeTurnRightState:
-        DriveTapeTurn(FALSE);
-        break;
-    case TapeStraightPivotState:
+    /* Only GYRO mode is driven continuously here. Tape align is timer-driven
+     * inside RunAlignSubHSM (search runs and jitter pulses). */
+    if (CurrentState != GyroHeadingAlignState) {
+        return;
+    }
+
+    error = RobotIMU_GetHeadingErrorToRefDeg();
+    if (AbsFloat(error) <= HEADING_THRESHOLD_DEG) {
+        RobotMotion_Stop();
+        LogAlignAction("gyro-centered-stop", error);
+    } else if (error > 0.0f) {
         RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
-        LogAlignAction("straight-pivot-left", RobotIMU_GetHeadingErrorToRefDeg());
-        break;
-    case TapeStraightTranslateState:
-        DriveStraightTranslate();
-        break;
-    default:
-        break;
+        LogAlignAction("gyro-turn-left", error);
+    } else {
+        RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+        LogAlignAction("gyro-turn-right", error);
     }
 }
 
@@ -408,20 +455,33 @@ float AlignSubHSM_GetPositionError(void)
 }
 
 static uint8_t InitAlignCommon(AlignMode_t mode, MovementAxis_t axis,
-        float xRefInches, float yRefInches)
+        BoundaryChoice_t boundary, float xRefInches, float yRefInches)
 {
     ES_Event returnEvent;
 
     alignMode = mode;
     alignAxis = axis;
+    alignBoundary = boundary;
     xRef = xRefInches;
     yRef = yRefInches;
     CurrentState = InitPAlignState;
     headingAlignedSamples = 0u;
-    tapeOffFlags = 0u;
-    straightTranslateDir = STRAIGHT_TRANSLATE_NONE;
+    alignTimerMs = ALIGN_TIMER_START_MS;
+    cornerSensor = CornerSensorForAlign();
+    cornerSeen = FALSE;
+    jitterBraking = FALSE;
+    /* Snapshot the tape sensors so the corner rising-edge can be detected when
+     * align finishes. */
+    tapeEntryMask = LiveTapeMask();
 #if ALIGN_LOG_ENABLED
     lastAlignAction = "none";
+    if (mode == ALIGN_MODE_TAPE) {
+        printf("[ALIGN] tape-align start axis=%s boundary=%s corner=tape%u entryMask=0x%02X\r\n",
+                (axis == MOVEMENT_AXIS_VERTICAL) ? "V" : "H",
+                (boundary == BOUNDARY_TOP) ? "TOP" : "BOTTOM",
+                (unsigned int) cornerSensor,
+                (unsigned int) tapeEntryMask);
+    }
 #endif
 
     returnEvent = RunAlignSubHSM(INIT_EVENT);
@@ -455,222 +515,161 @@ static uint8_t TapeMaskForSensor(uint8_t sensorNumber)
     return (uint8_t) (1u << (sensorNumber - 1u));
 }
 
-static uint8_t TapeOffMaskForBranch(const TapeAlignBranch_t *branch)
+static uint8_t LiveTapeMask(void)
 {
-    return (uint8_t) (TapeMaskForSensor(branch->sensorA) |
-            TapeMaskForSensor(branch->sensorB));
-}
+    uint8_t mask = 0u;
+    uint8_t sensor;
 
-static const TapeAlignBranch_t *SelectReadyTapeBranch(void)
-{
-    const TapeAlignBranch_t *branches;
-    uint8_t count;
-    uint8_t i;
-
-    if (alignAxis == MOVEMENT_AXIS_VERTICAL) {
-        branches = VerticalBranches;
-        count = (uint8_t) (sizeof(VerticalBranches) / sizeof(VerticalBranches[0]));
-    } else {
-        branches = HorizontalBranches;
-        count = (uint8_t) (sizeof(HorizontalBranches) / sizeof(HorizontalBranches[0]));
-    }
-
-    for (i = 0u; i < count; i++) {
-        uint8_t pairMask = TapeOffMaskForBranch(&branches[i]);
-        if ((tapeOffFlags & pairMask) == pairMask) {
-            return &branches[i];
+    for (sensor = 1u; sensor <= 5u; sensor++) {
+        if ((RobotPlugPlay_IsTapeEnabled(sensor) == TRUE) &&
+                (RobotSensors_IsTapeOn((TapeSensor_t) sensor) == TRUE)) {
+            mask |= TapeMaskForSensor(sensor);
         }
     }
-
-    return (const TapeAlignBranch_t *) 0;
+    return mask;
 }
 
-static uint8_t StartTapeBranch(const TapeAlignBranch_t *branch,
-        AlignState_t *nextState)
+static uint8_t CornerIsOn(void)
 {
-    float headingError;
-
-    activeTapeBranch = *branch;
-    straightTranslateDir = STRAIGHT_TRANSLATE_NONE;
-    *nextState = TapeTurnStateForHeading();
-#if ALIGN_LOG_ENABLED
-    /* New branch: clear the change tracker so the first turn direction below
-     * always prints, then announce the selected branch + target turn state. */
-    lastAlignAction = "none";
-    headingError = RobotIMU_GetHeadingErrorToRefDeg();
-    printf("[ALIGN] branch sensors=%u+%u off pivot=tape%u headingError=",
-            (unsigned int) branch->sensorA,
-            (unsigned int) branch->sensorB,
-            (unsigned int) branch->pivotSensor);
-    PrintFixedDeg(headingError);
-    printf(" -> %s\r\n", StateNames[*nextState]);
-#else
-    (void) headingError;
-#endif
-    return TRUE;
+    if (RobotPlugPlay_IsTapeEnabled(cornerSensor) == FALSE) {
+        return FALSE;
+    }
+    return (RobotSensors_IsTapeOn((TapeSensor_t) cornerSensor) == TRUE) ? TRUE : FALSE;
 }
 
-static AlignState_t TapeTurnStateForHeading(void)
+static uint8_t CenterTapeIsOn(void)
+{
+    return (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) ? TRUE : FALSE;
+}
+
+static uint8_t TapeHeadingIsStraight(void)
+{
+    return (AbsFloat(RobotIMU_GetHeadingErrorToRefDeg()) <=
+            TAPE_ALIGN_HEADING_STRAIGHT_DEG) ? TRUE : FALSE;
+}
+
+/* One heading-squaring turn pulse about center. Positive error (heading right
+ * of the reference) turns left, negative turns right. Heading is taken against
+ * the latched global reference and is never zeroed. */
+static void IssueTapeHeadingTurn(void)
 {
     float error = RobotIMU_GetHeadingErrorToRefDeg();
 
-    if (error > TAPE_ALIGN_HEADING_STRAIGHT_DEG) {
-        return TapeTurnLeftState;
-    }
-    if (error < -TAPE_ALIGN_HEADING_STRAIGHT_DEG) {
-        return TapeTurnRightState;
-    }
-    return TapeStraightPivotState;
-}
-
-static void RefreshTapeOffFlagsFromHardware(void)
-{
-    uint8_t sensor;
-
-    tapeOffFlags = 0u;
-    for (sensor = 1u; sensor <= 5u; sensor++) {
-        if ((RobotPlugPlay_IsTapeEnabled(sensor) == TRUE) &&
-                (RobotSensors_IsTapeOn((TapeSensor_t) sensor) == FALSE)) {
-            tapeOffFlags |= TapeMaskForSensor(sensor);
-        }
+    if (error > 0.0f) {
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+        LogAlignAction("tape-head-jitter-left", error);
+    } else {
+        RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+        LogAlignAction("tape-head-jitter-right", error);
     }
 }
 
-static uint8_t UpdateTapeFlagsFromChangedMask(uint8_t currentMask,
-        uint8_t changedMask)
-{
-    uint8_t sensor;
-    uint8_t mask;
-    uint8_t updated = FALSE;
-
-    changedMask &= TAPE_SENSOR_ALL_MASK;
-    currentMask &= TAPE_SENSOR_ALL_MASK;
-    for (sensor = 1u; sensor <= 5u; sensor++) {
-        mask = TapeMaskForSensor(sensor);
-        if ((changedMask & mask) == 0u) {
-            continue;
-        }
-        if ((currentMask & mask) == 0u) {
-            tapeOffFlags |= mask;
-        } else {
-            tapeOffFlags &= (uint8_t) ~mask;
-        }
-        updated = TRUE;
-    }
-    return updated;
-}
-
-static uint8_t CompleteIfRealignedTapeOn(ES_Event *event)
+/* TRUE when the event carries a tape-5 transition matching wantOn (1 = a fresh
+ * tape-5-ON edge, 0 = a fresh tape-5-OFF edge). */
+static uint8_t Tape5Edge(ES_Event event, uint8_t wantOn)
 {
     uint8_t currentMask;
     uint8_t changedMask;
 
-    if (event->EventType != TapeChangedEvent) {
+    if (event.EventType != TapeChangedEvent) {
         return FALSE;
+    }
+    currentMask = TAPE_EVENT_CURRENT_MASK(event.EventParam);
+    changedMask = TAPE_EVENT_CHANGED_MASK(event.EventParam);
+    if ((changedMask & TAPE_SENSOR_5_MASK) == 0u) {
+        return FALSE;
+    }
+    if (wantOn == TRUE) {
+        return ((currentMask & TAPE_SENSOR_5_MASK) != 0u) ? TRUE : FALSE;
+    }
+    return ((currentMask & TAPE_SENSOR_5_MASK) == 0u) ? TRUE : FALSE;
+}
+
+static uint8_t CornerSensorForAlign(void)
+{
+    if (alignAxis == MOVEMENT_AXIS_HORIZONTAL) {
+        return 2u;
+    }
+    return (alignBoundary == BOUNDARY_TOP) ? 4u : 3u;
+}
+
+/* Primary search direction (and its opposite for secondary/jitter):
+ *      horizontal     : primary reverse,      secondary forward
+ *      vertical TOP    : primary strafe right, secondary strafe left
+ *      vertical BOTTOM : primary strafe left,  secondary strafe right */
+static void IssueTapeSearchMotion(uint8_t primary)
+{
+    if (alignAxis == MOVEMENT_AXIS_HORIZONTAL) {
+        if (primary == TRUE) {
+            RobotMotion_Reverse(MOTOR_SPEED_IPS);
+            LogAlignAction("tape-search-reverse", RobotIMU_GetHeadingErrorToRefDeg());
+        } else {
+            RobotMotion_Forward(MOTOR_SPEED_IPS);
+            LogAlignAction("tape-search-forward", RobotIMU_GetHeadingErrorToRefDeg());
+        }
+    } else {
+        uint8_t primaryGoesRight = (alignBoundary == BOUNDARY_TOP) ? TRUE : FALSE;
+        uint8_t goRight = (primary == TRUE) ? primaryGoesRight
+                : (uint8_t) (primaryGoesRight == FALSE);
+        if (goRight == TRUE) {
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+            LogAlignAction("tape-search-strafe-right", RobotIMU_GetHeadingErrorToRefDeg());
+        } else {
+            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
+            LogAlignAction("tape-search-strafe-left", RobotIMU_GetHeadingErrorToRefDeg());
+        }
+    }
+}
+
+/* Jitter drives the secondary (opposite of primary) direction. */
+static void IssueTapeJitterMotion(void)
+{
+    if (alignAxis == MOVEMENT_AXIS_HORIZONTAL) {
+        RobotMotion_Forward(MOTOR_SPEED_IPS);
+        LogAlignAction("tape-jitter-forward", RobotIMU_GetHeadingErrorToRefDeg());
+    } else if (alignBoundary == BOUNDARY_TOP) {
+        RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
+        LogAlignAction("tape-jitter-strafe-left", RobotIMU_GetHeadingErrorToRefDeg());
+    } else {
+        RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+        LogAlignAction("tape-jitter-strafe-right", RobotIMU_GetHeadingErrorToRefDeg());
+    }
+}
+
+static void EnterTapeSearch(uint8_t primary)
+{
+    IssueTapeSearchMotion(primary);
+    ES_Timer_InitTimer(NAV_SETTLE_TIMER, alignTimerMs);
+    alignTimerMs = (uint16_t) (alignTimerMs + ALIGN_TIMER_STEP_MS);
+}
+
+/* Stop, mark the event as Realigned, and synthesize the corner-sensor rising
+ * edge for the nav state if the corner sensor rose between align entry and now.
+ * The synthetic TapeChangedEvent is posted to the top so it is delivered after
+ * nav has returned from AlignState to its strafe/drive state. */
+static void CompleteTapeRealign(ES_Event *event)
+{
+    uint8_t cornerMask = TapeMaskForSensor(cornerSensor);
+    uint8_t roseAtCorner = (((tapeEntryMask & cornerMask) == 0u) &&
+            (CornerIsOn() == TRUE)) ? TRUE : FALSE;
+
+    RobotMotion_Stop();
+
+    if (roseAtCorner == TRUE) {
+        ES_Event tapeEvent;
+        uint8_t liveMask = (uint8_t) (LiveTapeMask() | cornerMask);
+
+        tapeEvent.EventType = TapeChangedEvent;
+        tapeEvent.EventParam = TAPE_EVENT_MAKE_PARAM(liveMask, cornerMask);
+        PostRobotHSM(tapeEvent);
+#if ALIGN_LOG_ENABLED
+        printf("[ALIGN] corner rising edge tape%u synthesized (entry off -> exit on)\r\n",
+                (unsigned int) cornerSensor);
+#endif
     }
 
-    currentMask = TAPE_EVENT_CURRENT_MASK(event->EventParam);
-    changedMask = TAPE_EVENT_CHANGED_MASK(event->EventParam);
-    UpdateTapeFlagsFromChangedMask(currentMask, changedMask);
-    if ((currentMask & changedMask & activeTapeBranch.realignMask) == 0u) {
-        event->EventType = ES_NO_EVENT;
-        return FALSE;
-    }
-    RobotMotion_Stop();
     event->EventType = RealignedEvent;
     event->EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
-    return TRUE;
-}
-
-static TurnPivot_t PivotForTapeSensor(uint8_t sensorNumber)
-{
-    switch (sensorNumber) {
-    case 1u:
-        return TURN_PIVOT_FRONT_CENTER;
-    case 2u:
-        return TURN_PIVOT_BACK_CENTER;
-    case 3u:
-        return TURN_PIVOT_LEFT_CENTER;
-    case 4u:
-        return TURN_PIVOT_RIGHT_CENTER;
-    case 5u:
-    default:
-        return TURN_PIVOT_CENTER;
-    }
-}
-
-/* Re-evaluate the heading-straight pivot from live tape readings. While pivoting
- * left about center, the first edge sensor to find the line picks the translate
- * direction that will carry center sensor 5 onto the line:
- *   horizontal: tape3 -> reverse, tape4 -> forward
- *   vertical:   tape1 -> strafe-left, tape2 -> strafe-right
- * If center sensor 5 is already on the line there is nothing to translate. */
-static StraightDecision_t EvaluateStraightPivot(void)
-{
-    if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
-        return STRAIGHT_DONE;
-    }
-
-    if (alignAxis == MOVEMENT_AXIS_HORIZONTAL) {
-        if (RobotSensors_IsTapeOn(TAPE_SENSOR_3) == TRUE) {
-            straightTranslateDir = STRAIGHT_TRANSLATE_REVERSE;
-            return STRAIGHT_GO_TRANSLATE;
-        }
-        if (RobotSensors_IsTapeOn(TAPE_SENSOR_4) == TRUE) {
-            straightTranslateDir = STRAIGHT_TRANSLATE_FORWARD;
-            return STRAIGHT_GO_TRANSLATE;
-        }
-    } else {
-        if (RobotSensors_IsTapeOn(TAPE_SENSOR_1) == TRUE) {
-            straightTranslateDir = STRAIGHT_TRANSLATE_STRAFE_LEFT;
-            return STRAIGHT_GO_TRANSLATE;
-        }
-        if (RobotSensors_IsTapeOn(TAPE_SENSOR_2) == TRUE) {
-            straightTranslateDir = STRAIGHT_TRANSLATE_STRAFE_RIGHT;
-            return STRAIGHT_GO_TRANSLATE;
-        }
-    }
-
-    return STRAIGHT_KEEP_PIVOT;
-}
-
-static void DriveStraightTranslate(void)
-{
-    switch (straightTranslateDir) {
-    case STRAIGHT_TRANSLATE_FORWARD:
-        RobotMotion_Forward(MOTOR_SPEED_IPS);
-        LogAlignAction("straight-forward", RobotIMU_GetHeadingErrorToRefDeg());
-        break;
-    case STRAIGHT_TRANSLATE_REVERSE:
-        RobotMotion_Reverse(MOTOR_SPEED_IPS);
-        LogAlignAction("straight-reverse", RobotIMU_GetHeadingErrorToRefDeg());
-        break;
-    case STRAIGHT_TRANSLATE_STRAFE_LEFT:
-        RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
-        LogAlignAction("straight-strafe-left", RobotIMU_GetHeadingErrorToRefDeg());
-        break;
-    case STRAIGHT_TRANSLATE_STRAFE_RIGHT:
-        RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
-        LogAlignAction("straight-strafe-right", RobotIMU_GetHeadingErrorToRefDeg());
-        break;
-    case STRAIGHT_TRANSLATE_NONE:
-    default:
-        RobotMotion_Stop();
-        break;
-    }
-}
-
-static void DriveTapeTurn(uint8_t turnLeft)
-{
-    TurnPivot_t pivot = PivotForTapeSensor(activeTapeBranch.pivotSensor);
-
-    if (turnLeft == TRUE) {
-        RobotMotion_TurnLeftAbout(pivot, TURN_SPEED_IPS);
-        LogAlignAction("tape-turn-left", RobotIMU_GetHeadingErrorToRefDeg());
-    } else {
-        RobotMotion_TurnRightAbout(pivot, TURN_SPEED_IPS);
-        LogAlignAction("tape-turn-right", RobotIMU_GetHeadingErrorToRefDeg());
-    }
 }
 
 static void LogAlignAction(const char *action, float headingErrDeg)

@@ -113,6 +113,25 @@ uint16_t RobotSensors_GetBeaconADC(void)
 #endif
 }
 
+uint8_t RobotSensors_IsBeaconAverageReady(void)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    return (beaconSampleCount >= BEACON_AVERAGE_SAMPLE_COUNT) ? TRUE : FALSE;
+#else
+    return FALSE;
+#endif
+}
+
+void RobotSensors_ResetBeaconAverage(void)
+{
+#if ROBOT_PLUGPLAY_USE_BEACON_ADC
+    beaconSampleCount = 0u;
+    beaconSampleIndex = 0u;
+    beaconSampleSum = 0u;
+    sampledBeaconSmoothADC = 0u;
+#endif
+}
+
 uint8_t RobotSensors_ReadTapeDigital(TapeSensor_t sensor)
 {
     uint8_t port;

@@ -37,6 +37,7 @@ static uint16_t lastBeaconADC = 0u;
 static uint16_t peakBeaconADC = 0u;
 static uint16_t minBeaconADC = 1024u;
 static uint8_t beaconHadIncrease = FALSE;
+static uint8_t beaconAverageReadyLatched = FALSE;
 static uint32_t lastTapeSampleLogMs = 0u;
 static uint8_t beaconStreamActive = FALSE;
 static uint32_t lastBeaconStreamPrintMs = 0u;
@@ -49,6 +50,7 @@ static uint8_t PostOnRising(uint8_t current, uint8_t *previous,
 static uint8_t PostOnChange(uint8_t current, uint8_t *previous,
                             ES_EventTyp_t onEvent, ES_EventTyp_t offEvent, uint16_t eventParam);
 static uint8_t IsBeaconSearchActive(void);
+static void ResetBeaconTracking(void);
 static uint8_t IsRobotMisaligned(void);
 static float AbsFloat(float value);
 static void LogIMUInitial(void);
@@ -118,6 +120,7 @@ void InitRobotEventCheckers(void)
     peakBeaconADC = lastBeaconADC;
     minBeaconADC = lastBeaconADC;
     beaconHadIncrease = FALSE;
+    beaconAverageReadyLatched = FALSE;
     lastImuUpdateMs = ES_Timer_GetTime() - ROBOT_IMU_UPDATE_PERIOD_MS;
 #if ROBOT_PLUGPLAY_USE_SHOOTER_ADC
     LogShooterADCInitial(RobotSensors_ReadShooterMotorADC());
@@ -238,6 +241,27 @@ uint8_t CheckBeaconEvents(void)
         peakBeaconADC = current;
         minBeaconADC = current;
         beaconHadIncrease = FALSE;
+        beaconAverageReadyLatched = FALSE;
+        return FALSE;
+    }
+
+    /* Ignore beacon events until the smoothing window is full. During fill the
+     * average ramps (e.g. 0 -> ~512 at idle) and would look like an increase. */
+    if (RobotSensors_IsBeaconAverageReady() == FALSE)
+    {
+        beaconAverageReadyLatched = FALSE;
+        return FALSE;
+    }
+
+    /* First sample after the window is full: snap the search baseline so the
+     * fill ramp cannot satisfy min+delta on the next cycle. */
+    if (beaconAverageReadyLatched == FALSE)
+    {
+        beaconAverageReadyLatched = TRUE;
+        lastBeaconADC = current;
+        peakBeaconADC = current;
+        minBeaconADC = current;
+        beaconHadIncrease = FALSE;
         return FALSE;
     }
 
@@ -267,6 +291,7 @@ uint8_t CheckBeaconEvents(void)
 
         lastBeaconADC = current;
         beaconHadIncrease = FALSE;
+        ResetBeaconTracking();
         LogBeaconEvent(MaxSignalFoundEvent, current, peak);
         return PostEvent(MaxSignalFoundEvent, peak);
     }
@@ -532,6 +557,16 @@ static uint8_t IsBeaconSearchActive(void)
             ShootingSubHSM_IsBeaconSearchActive())
                ? TRUE
                : FALSE;
+}
+
+static void ResetBeaconTracking(void)
+{
+    RobotSensors_ResetBeaconAverage();
+    lastBeaconADC = 0u;
+    peakBeaconADC = 0u;
+    minBeaconADC = 1024u;
+    beaconHadIncrease = FALSE;
+    beaconAverageReadyLatched = FALSE;
 }
 
 static uint8_t IsRobotMisaligned(void)

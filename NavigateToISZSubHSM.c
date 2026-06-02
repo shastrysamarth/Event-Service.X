@@ -549,10 +549,10 @@ uint8_t NavigateToISZ_IsAligning(void)
 
 uint8_t NavigateToISZ_AllowsAlign(void)
 {
-    if (IsAlignableState(CurrentState) == FALSE) {
-        return FALSE;
-    }
-    return (AlignModeForState(CurrentState) == ALIGN_MODE_GYRO) ? TRUE : FALSE;
+    /* Both align modes react to heading drift now: tape align squares the
+     * heading (jitter turns) before its tape sweep, so MisalignedEvent must be
+     * allowed to fire in any alignable driving state. */
+    return IsAlignableState(CurrentState);
 }
 
 uint8_t NavigateToISZ_IsCountingTape5(void)
@@ -718,11 +718,11 @@ static uint8_t HandleAlignTriggerEvent(ES_Event *event,
     }
 
     if (mode == ALIGN_MODE_TAPE) {
-        /* Only divert to a tape-align when the robot is genuinely off the line
-         * (>=2 of the relevant sensors off). That is exactly the condition the
-         * branch selector can act on (it needs a sensor PAIR off). A single
-         * sensor blinking off while we strafe across the line must NOT trigger
-         * an align that TapeWaitOffState cannot resolve. */
+        /* Divert to a tape-align when the heading drifts off the global
+         * reference (MisalignedEvent) OR center sensor 5 leaves the line
+         * (TapeAlignNeededNow). Tape align jitter-squares the heading first,
+         * then sweeps the axis to put tape 5 back and watches the corner
+         * sensor, so the gyro trigger is loop-safe. */
         if (((event->EventType == ES_ENTRY) ||
                 (event->EventType == TapeChangedEvent)) &&
                 (TapeAlignNeededNow() == TRUE)) {
@@ -733,6 +733,9 @@ static uint8_t HandleAlignTriggerEvent(ES_Event *event,
             return TRUE;
         }
         if (event->EventType == MisalignedEvent) {
+            BeginAlignForState(CurrentState);
+            *nextState = AlignState;
+            *makeTransition = TRUE;
             event->EventType = ES_NO_EVENT;
             return TRUE;
         }
@@ -743,36 +746,13 @@ static uint8_t HandleAlignTriggerEvent(ES_Event *event,
 
 static uint8_t TapeAlignNeededNow(void)
 {
-    uint8_t offCount = 0u;
-    uint8_t sensorA;
-    uint8_t sensorB;
-    uint8_t sensorC = 5u;
-
-    if (movement_axis == MOVEMENT_AXIS_VERTICAL) {
-        sensorA = 1u;
-        sensorB = 2u;
-    } else {
-        sensorA = 3u;
-        sensorB = 4u;
-    }
-
-    if ((RobotPlugPlay_IsTapeEnabled(sensorA) == FALSE) ||
-            (RobotPlugPlay_IsTapeEnabled(sensorB) == FALSE) ||
-            (RobotPlugPlay_IsTapeEnabled(sensorC) == FALSE)) {
+    /* The rewritten tape align keys entirely off center sensor 5: align is
+     * needed whenever sensor 5 has left the line. */
+    if (RobotPlugPlay_IsTapeEnabled(5u) == FALSE) {
         return FALSE;
     }
 
-    if (RobotSensors_IsTapeOn((TapeSensor_t) sensorA) == FALSE) {
-        offCount++;
-    }
-    if (RobotSensors_IsTapeOn((TapeSensor_t) sensorB) == FALSE) {
-        offCount++;
-    }
-    if (RobotSensors_IsTapeOn((TapeSensor_t) sensorC) == FALSE) {
-        offCount++;
-    }
-
-    return (offCount >= 2u) ? TRUE : FALSE;
+    return (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == FALSE) ? TRUE : FALSE;
 }
 
 static void BeginAlignForState(NavigateState_t state)
@@ -792,7 +772,7 @@ static void BeginAlignForState(NavigateState_t state)
             (int) RobotSensors_IsTapeOn(TAPE_SENSOR_4),
             (int) RobotSensors_IsTapeOn(TAPE_SENSOR_5));
     if (mode == ALIGN_MODE_TAPE) {
-        InitTapeAlignSubHSM(movement_axis, x_ref, y_ref);
+        InitTapeAlignSubHSM(movement_axis, boundary_choice, x_ref, y_ref);
     } else {
         InitGyroAlignSubHSM(movement_axis, x_ref, y_ref);
     }

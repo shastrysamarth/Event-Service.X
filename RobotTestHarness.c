@@ -659,7 +659,9 @@ static void BeaconBenchPrintReading(void);
  * whether BeaconADCIncreaseEvent or MaxSignalFoundEvent would fire. */
 static uint16_t beaconBenchLastADC = 0u;
 static uint16_t beaconBenchPeakADC = 0u;
+static uint16_t beaconBenchMinADC = 1024u;
 static uint8_t beaconBenchHadIncrease = FALSE;
+static uint8_t beaconBenchAverageReadyLatched = FALSE;
 
 void RobotTestHarness_RunBeaconBench(void)
 {
@@ -689,7 +691,10 @@ void RobotTestHarness_RunBeaconBench(void)
                 if (streaming) {
                     beaconBenchLastADC = 0u;
                     beaconBenchPeakADC = 0u;
+                    beaconBenchMinADC = 1024u;
                     beaconBenchHadIncrease = FALSE;
+                    beaconBenchAverageReadyLatched = FALSE;
+                    RobotSensors_ResetBeaconAverage();
                     printf("[BEACON] stream ON\r\n");
                 } else {
                     printf("[BEACON] stream OFF\r\n");
@@ -708,14 +713,23 @@ void RobotTestHarness_RunBeaconBench(void)
         if (streaming && ((unsigned int) (now - lastSampleTime) >= 5u)) {
             uint16_t s = RobotSensors_ReadBeaconADC();
 
-            if (beaconBenchLastADC == 0u && beaconBenchPeakADC == 0u) {
+            if (RobotSensors_IsBeaconAverageReady() == FALSE) {
+                beaconBenchAverageReadyLatched = FALSE;
+            } else if (beaconBenchAverageReadyLatched == FALSE) {
+                beaconBenchAverageReadyLatched = TRUE;
                 beaconBenchLastADC = s;
                 beaconBenchPeakADC = s;
+                beaconBenchMinADC = s;
+                beaconBenchHadIncrease = FALSE;
             } else {
                 if (s > beaconBenchPeakADC) {
                     beaconBenchPeakADC = s;
                 }
-                if (s >= (beaconBenchLastADC + BEACON_ADC_DELTA)) {
+                if (s < beaconBenchMinADC) {
+                    beaconBenchMinADC = s;
+                }
+                if ((beaconBenchHadIncrease == FALSE) &&
+                        (s >= (beaconBenchMinADC + BEACON_ADC_DELTA))) {
                     beaconBenchHadIncrease = TRUE;
                 } else if ((beaconBenchHadIncrease == TRUE) &&
                         ((s + BEACON_ADC_DELTA) <= beaconBenchPeakADC)) {
@@ -753,19 +767,24 @@ static void BeaconBenchPrintReading(void)
 {
     uint16_t rawADC = RobotSensors_ReadBeaconRawADC();
     uint16_t smoothADC = RobotSensors_GetBeaconADC();
-    uint8_t wouldIncrease = (smoothADC >= (beaconBenchLastADC + BEACON_ADC_DELTA));
+    uint8_t avgReady = RobotSensors_IsBeaconAverageReady();
+    uint8_t wouldIncrease = (avgReady == TRUE) && (beaconBenchAverageReadyLatched == TRUE) &&
+            (beaconBenchHadIncrease == FALSE) &&
+            (smoothADC >= (beaconBenchMinADC + BEACON_ADC_DELTA));
     uint8_t wouldPeak = (beaconBenchHadIncrease == TRUE) &&
             ((uint16_t) (smoothADC + BEACON_ADC_DELTA) <= beaconBenchPeakADC);
     int16_t delta = (int16_t) smoothADC - (int16_t) beaconBenchLastADC;
 
-    printf("[BEACON] raw=%u avg=%u last=%u peak=%u delta=%c%u/%u%s%s\r\n",
+    printf("[BEACON] raw=%u avg=%u last=%u peak=%u min=%u delta=%c%u/%u%s%s%s\r\n",
             (unsigned int) rawADC,
             (unsigned int) smoothADC,
             (unsigned int) beaconBenchLastADC,
             (unsigned int) beaconBenchPeakADC,
+            (unsigned int) beaconBenchMinADC,
             (delta >= 0) ? '+' : '-',
             (unsigned int) ((delta >= 0) ? (uint16_t) delta : (uint16_t) -delta),
             (unsigned int) BEACON_ADC_DELTA,
+            (avgReady == FALSE) ? " [FILLING]" : "",
             wouldIncrease ? " [INCREASING]" : "",
             wouldPeak ? " [PEAKED]" : "");
 }

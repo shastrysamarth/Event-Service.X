@@ -13,7 +13,8 @@ typedef enum {
 
 uint8_t InitAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches);
 uint8_t InitGyroAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches);
-uint8_t InitTapeAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches);
+uint8_t InitTapeAlignSubHSM(MovementAxis_t axis, BoundaryChoice_t boundary,
+        float xRefInches, float yRefInches);
 ES_Event RunAlignSubHSM(ES_Event ThisEvent);
 
 uint8_t AlignSubHSM_IsActive(void);
