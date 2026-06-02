@@ -12,15 +12,43 @@
 
 #include <stdio.h>
 
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_ALIGN
+#define ALIGN_TRACE(...) printf(__VA_ARGS__)
+#define ALIGN_LOG_ENABLED 1
+#else
+#define ALIGN_TRACE(...) ((void) 0)
+#define ALIGN_LOG_ENABLED 0
+#endif
+
 typedef enum {
     InitPAlignState,
     GyroHeadingAlignState,
     TapeWaitOffState,
     TapeTurnLeftState,
     TapeTurnRightState,
-    TapeStraightRightState,
-    TapeStraightLeftState,
+    /* Heading-straight branch: pivot left about center until an edge sensor
+     * (3/4 horizontal, 1/2 vertical) finds the line, then translate so center
+     * sensor 5 lands on the line. Replaces the old timed left/right sweep. */
+    TapeStraightPivotState,
+    TapeStraightTranslateState,
 } AlignState_t;
+
+/* Translate direction chosen once an edge sensor finds the line, used to bring
+ * center sensor 5 onto the line in the heading-straight branch. */
+typedef enum {
+    STRAIGHT_TRANSLATE_NONE,
+    STRAIGHT_TRANSLATE_FORWARD,
+    STRAIGHT_TRANSLATE_REVERSE,
+    STRAIGHT_TRANSLATE_STRAFE_LEFT,
+    STRAIGHT_TRANSLATE_STRAFE_RIGHT,
+} StraightTranslate_t;
+
+/* Result of re-evaluating the heading-straight pivot from live tape readings. */
+typedef enum {
+    STRAIGHT_KEEP_PIVOT,
+    STRAIGHT_GO_TRANSLATE,
+    STRAIGHT_DONE,
+} StraightDecision_t;
 
 typedef struct {
     uint8_t sensorA;
@@ -35,8 +63,8 @@ static const char *StateNames[] = {
     "TapeWaitOffState",
     "TapeTurnLeftState",
     "TapeTurnRightState",
-    "TapeStraightRightState",
-    "TapeStraightLeftState",
+    "TapeStraightPivotState",
+    "TapeStraightTranslateState",
 };
 
 static const TapeAlignBranch_t VerticalBranches[] = {
@@ -62,6 +90,13 @@ static TapeAlignBranch_t activeTapeBranch = {
     1u, 2u, 5u,
     TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK
 };
+static StraightTranslate_t straightTranslateDir = STRAIGHT_TRANSLATE_NONE;
+#if ALIGN_LOG_ENABLED
+/* Last commanded turn direction we logged, so [ALIGN] prints only on a change
+ * (UpdateControl runs every checker cycle while aligning). Stable literals, so
+ * pointer comparison is enough. */
+static const char *lastAlignAction = "none";
+#endif
 
 static uint8_t InitAlignCommon(AlignMode_t mode, MovementAxis_t axis,
         float xRefInches, float yRefInches);
@@ -79,7 +114,10 @@ static uint8_t UpdateTapeFlagsFromChangedMask(uint8_t currentMask,
 static uint8_t CompleteIfRealignedTapeOn(ES_Event *event);
 static TurnPivot_t PivotForTapeSensor(uint8_t sensorNumber);
 static void DriveTapeTurn(uint8_t turnLeft);
+static StraightDecision_t EvaluateStraightPivot(void);
+static void DriveStraightTranslate(void);
 static void PrintFixedDeg(float value);
+static void LogAlignAction(const char *action, float headingErrDeg);
 
 uint8_t InitAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches)
 {
@@ -166,7 +204,6 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
 
     case TapeTurnLeftState:
     case TapeTurnRightState:
-    case TapeStraightLeftState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             AlignSubHSM_UpdateControl();
@@ -184,16 +221,57 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
         }
         break;
 
-    case TapeStraightRightState:
+    case TapeStraightPivotState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            ES_Timer_InitTimer(NAV_SETTLE_TIMER, TAPE_ALIGN_SWEEP_TIMER_MS);
+            /* An edge sensor may already be on the line (e.g. the 3+5 / 4+5
+             * off pairs leave the other edge sensor reading tape), so try to
+             * pick a translate direction right away; otherwise pivot left. */
+            if (EvaluateStraightPivot() == STRAIGHT_GO_TRANSLATE) {
+                nextState = TapeStraightTranslateState;
+                makeTransition = TRUE;
+            } else {
+                AlignSubHSM_UpdateControl();
+            }
+            break;
+        case TapeChangedEvent: {
+            StraightDecision_t decision = EvaluateStraightPivot();
+            if (decision == STRAIGHT_GO_TRANSLATE) {
+                nextState = TapeStraightTranslateState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else if (decision == STRAIGHT_DONE) {
+                /* Center sensor already found the line: nothing to translate. */
+                RobotMotion_Stop();
+                ThisEvent.EventType = RealignedEvent;
+                ThisEvent.EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
+            } else {
+                AlignSubHSM_UpdateControl();
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        }
+        case RealignedEvent:
+            RobotMotion_Stop();
+            ThisEvent.EventType = RealignedEvent;
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case TapeStraightTranslateState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
             AlignSubHSM_UpdateControl();
             break;
-        case ES_TIMEOUT:
-            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
-                nextState = TapeStraightLeftState;
-                makeTransition = TRUE;
+        case TapeChangedEvent:
+            if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
+                RobotMotion_Stop();
+                ThisEvent.EventType = RealignedEvent;
+                ThisEvent.EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
+            } else {
+                AlignSubHSM_UpdateControl();
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
@@ -202,7 +280,6 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
             ThisEvent.EventType = RealignedEvent;
             break;
         default:
-            (void) CompleteIfRealignedTapeOn(&ThisEvent);
             break;
         }
         break;
@@ -242,8 +319,8 @@ uint8_t AlignSubHSM_IsTapeStage(void)
     return ((CurrentState == TapeWaitOffState) ||
             (CurrentState == TapeTurnLeftState) ||
             (CurrentState == TapeTurnRightState) ||
-            (CurrentState == TapeStraightRightState) ||
-            (CurrentState == TapeStraightLeftState)) ? TRUE : FALSE;
+            (CurrentState == TapeStraightPivotState) ||
+            (CurrentState == TapeStraightTranslateState)) ? TRUE : FALSE;
 }
 
 void AlignSubHSM_UpdateControl(void)
@@ -255,19 +332,27 @@ void AlignSubHSM_UpdateControl(void)
         error = RobotIMU_GetHeadingErrorToZeroDeg();
         if (AbsFloat(error) <= HEADING_THRESHOLD_DEG) {
             RobotMotion_Stop();
+            LogAlignAction("gyro-centered-stop", error);
         } else if (error > 0.0f) {
             RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+            LogAlignAction("gyro-turn-left", error);
         } else {
             RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+            LogAlignAction("gyro-turn-right", error);
         }
         break;
     case TapeTurnLeftState:
-    case TapeStraightLeftState:
         DriveTapeTurn(TRUE);
         break;
     case TapeTurnRightState:
-    case TapeStraightRightState:
         DriveTapeTurn(FALSE);
+        break;
+    case TapeStraightPivotState:
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
+        LogAlignAction("straight-pivot-left", RobotIMU_GetHeadingErrorToZeroDeg());
+        break;
+    case TapeStraightTranslateState:
+        DriveStraightTranslate();
         break;
     default:
         break;
@@ -334,6 +419,10 @@ static uint8_t InitAlignCommon(AlignMode_t mode, MovementAxis_t axis,
     CurrentState = InitPAlignState;
     headingAlignedSamples = 0u;
     tapeOffFlags = 0u;
+    straightTranslateDir = STRAIGHT_TRANSLATE_NONE;
+#if ALIGN_LOG_ENABLED
+    lastAlignAction = "none";
+#endif
 
     returnEvent = RunAlignSubHSM(INIT_EVENT);
     return (returnEvent.EventType == ES_NO_EVENT) ? TRUE : FALSE;
@@ -402,8 +491,12 @@ static uint8_t StartTapeBranch(const TapeAlignBranch_t *branch,
     float headingError;
 
     activeTapeBranch = *branch;
+    straightTranslateDir = STRAIGHT_TRANSLATE_NONE;
     *nextState = TapeTurnStateForHeading();
-#if ROBOT_REALTIME_TRACE
+#if ALIGN_LOG_ENABLED
+    /* New branch: clear the change tracker so the first turn direction below
+     * always prints, then announce the selected branch + target turn state. */
+    lastAlignAction = "none";
     headingError = RobotIMU_GetHeadingErrorToZeroDeg();
     printf("[ALIGN] branch sensors=%u+%u off pivot=tape%u headingError=",
             (unsigned int) branch->sensorA,
@@ -427,7 +520,7 @@ static AlignState_t TapeTurnStateForHeading(void)
     if (error < -TAPE_ALIGN_HEADING_STRAIGHT_DEG) {
         return TapeTurnRightState;
     }
-    return TapeStraightRightState;
+    return TapeStraightPivotState;
 }
 
 static void RefreshTapeOffFlagsFromHardware(void)
@@ -506,15 +599,93 @@ static TurnPivot_t PivotForTapeSensor(uint8_t sensorNumber)
     }
 }
 
+/* Re-evaluate the heading-straight pivot from live tape readings. While pivoting
+ * left about center, the first edge sensor to find the line picks the translate
+ * direction that will carry center sensor 5 onto the line:
+ *   horizontal: tape3 -> reverse, tape4 -> forward
+ *   vertical:   tape1 -> strafe-left, tape2 -> strafe-right
+ * If center sensor 5 is already on the line there is nothing to translate. */
+static StraightDecision_t EvaluateStraightPivot(void)
+{
+    if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
+        return STRAIGHT_DONE;
+    }
+
+    if (alignAxis == MOVEMENT_AXIS_HORIZONTAL) {
+        if (RobotSensors_IsTapeOn(TAPE_SENSOR_3) == TRUE) {
+            straightTranslateDir = STRAIGHT_TRANSLATE_REVERSE;
+            return STRAIGHT_GO_TRANSLATE;
+        }
+        if (RobotSensors_IsTapeOn(TAPE_SENSOR_4) == TRUE) {
+            straightTranslateDir = STRAIGHT_TRANSLATE_FORWARD;
+            return STRAIGHT_GO_TRANSLATE;
+        }
+    } else {
+        if (RobotSensors_IsTapeOn(TAPE_SENSOR_1) == TRUE) {
+            straightTranslateDir = STRAIGHT_TRANSLATE_STRAFE_LEFT;
+            return STRAIGHT_GO_TRANSLATE;
+        }
+        if (RobotSensors_IsTapeOn(TAPE_SENSOR_2) == TRUE) {
+            straightTranslateDir = STRAIGHT_TRANSLATE_STRAFE_RIGHT;
+            return STRAIGHT_GO_TRANSLATE;
+        }
+    }
+
+    return STRAIGHT_KEEP_PIVOT;
+}
+
+static void DriveStraightTranslate(void)
+{
+    switch (straightTranslateDir) {
+    case STRAIGHT_TRANSLATE_FORWARD:
+        RobotMotion_Forward(MOTOR_SPEED_IPS);
+        LogAlignAction("straight-forward", RobotIMU_GetHeadingErrorToZeroDeg());
+        break;
+    case STRAIGHT_TRANSLATE_REVERSE:
+        RobotMotion_Reverse(MOTOR_SPEED_IPS);
+        LogAlignAction("straight-reverse", RobotIMU_GetHeadingErrorToZeroDeg());
+        break;
+    case STRAIGHT_TRANSLATE_STRAFE_LEFT:
+        RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
+        LogAlignAction("straight-strafe-left", RobotIMU_GetHeadingErrorToZeroDeg());
+        break;
+    case STRAIGHT_TRANSLATE_STRAFE_RIGHT:
+        RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+        LogAlignAction("straight-strafe-right", RobotIMU_GetHeadingErrorToZeroDeg());
+        break;
+    case STRAIGHT_TRANSLATE_NONE:
+    default:
+        RobotMotion_Stop();
+        break;
+    }
+}
+
 static void DriveTapeTurn(uint8_t turnLeft)
 {
     TurnPivot_t pivot = PivotForTapeSensor(activeTapeBranch.pivotSensor);
 
     if (turnLeft == TRUE) {
         RobotMotion_TurnLeftAbout(pivot, TURN_SPEED_IPS);
+        LogAlignAction("tape-turn-left", RobotIMU_GetHeadingErrorToZeroDeg());
     } else {
         RobotMotion_TurnRightAbout(pivot, TURN_SPEED_IPS);
+        LogAlignAction("tape-turn-right", RobotIMU_GetHeadingErrorToZeroDeg());
     }
+}
+
+static void LogAlignAction(const char *action, float headingErrDeg)
+{
+#if ALIGN_LOG_ENABLED
+    if (action != lastAlignAction) {
+        printf("[ALIGN] %s headingErr=", action);
+        PrintFixedDeg(headingErrDeg);
+        printf("\r\n");
+        lastAlignAction = action;
+    }
+#else
+    (void) action;
+    (void) headingErrDeg;
+#endif
 }
 
 static void PrintFixedDeg(float value)

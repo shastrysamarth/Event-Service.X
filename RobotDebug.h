@@ -10,7 +10,7 @@ void RobotDebug_LogStateEntry(const char *machineName,
 void RobotDebug_PrintCurrentState(void);
 void RobotDebug_PrintModuleVariables(void);
 
-#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_CHATTY_LOGS
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_STATE
 #define ROBOT_DEBUG_STATE(machineName, stateName, event) \
     RobotDebug_LogStateEntry((machineName), (stateName), (event))
 #else

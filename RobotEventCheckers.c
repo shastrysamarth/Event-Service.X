@@ -323,7 +323,6 @@ uint8_t CheckTapeEvents(void)
             LogTapeChange(i + 1u, raw, current);
         }
         LogTapeMask(tapeMask, changedMask);
-        FindFrontTape_FastTapeReaction(TapeChangedEvent, tapeMask);
         postedAny = PostEvent(TapeChangedEvent,
                 TAPE_EVENT_MAKE_PARAM(tapeMask, changedMask));
     }
@@ -666,7 +665,7 @@ static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape)
 
 static void LogTapeMask(uint8_t tapeMask, uint8_t changedMask)
 {
-#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_CHATTY_LOGS
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_TAPE
     printf("[TAPE] change mask=0x%02X changed=0x%02X "
            "s1=%s s2=%s s3=%s s4=%s s5=%s\r\n",
            (unsigned int)tapeMask,
@@ -766,7 +765,7 @@ static void LogBumpChange(uint8_t sensorNumber, uint8_t raw, uint8_t bumped)
 
 static void LogBumpMask(uint8_t bumpMask, uint8_t changedMask)
 {
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_BUMP
     printf("[BUMP] mask=0x%02X changed=0x%02X -> %s\r\n",
            (unsigned int)bumpMask,
            (unsigned int)changedMask,

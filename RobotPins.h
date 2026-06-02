@@ -6,9 +6,6 @@
 #include "RC_Servo.h"
 #include "pwm.h"
 
-#ifndef ROBOT_CHATTY_LOGS
-#define ROBOT_CHATTY_LOGS 1
-#endif
 
 #define CHASSIS_WIDTH_IN 10.0f
 #define CHASSIS_LENGTH_IN 10.0f
@@ -27,6 +24,11 @@
 #define FIND_FRONT_IMU_SETTLE_MS 3000u
 #define TURN_IMU_SETTLE_MS 100u
 #define SHOOT_TIME_MS 120000u
+
+/* FindFrontTape approach timings (reuse FIND_FRONT_IMU_TIMER, states are serial). */
+#define FRONT_TAPE_CONFIRM_MS 100u
+#define FRONT_TAPE_BACKUP_MS 500u
+#define FRONT_TAPE_RECOVER_TURN_MS 100u
 
 #define FIND_FRONT_IMU_TIMER 0
 #define NAV_SETTLE_TIMER 1
@@ -52,13 +54,45 @@
 #ifndef ROBOT_REALTIME_TRACE
 #define ROBOT_REALTIME_TRACE 0
 #endif
-/* Master switch for the high-rate per-event trace logs: [STATE] entries,
- * [MOTOR] control changes, [TAPE] change masks, and [NAV] traces. These print
- * on every event and can back up the UART / event queues and slow sensor
- * sampling. Set to 0 to silence them (one-shot init + snapshot logs still obey
- * ROBOT_DEBUG); set to 1 to restore the verbose tracing while debugging. */
+/* Master switch for the high-rate per-event trace logs. These print on every
+ * event and can back up the UART / event queues and slow sensor sampling. Set
+ * to 0 to silence them (one-shot init + snapshot logs still obey ROBOT_DEBUG);
+ * set to 1 to restore the verbose tracing while debugging.
+ *
+ * Each log family below defaults to this global value but can be overridden
+ * individually on the build command line, e.g.:
+ *     -DROBOT_CHATTY_LOGS=0 -DROBOT_LOG_MOTOR=1 -DROBOT_LOG_ALIGN=1
+ * turns everything off except the motor-control and align traces. */
 #ifndef ROBOT_CHATTY_LOGS
 #define ROBOT_CHATTY_LOGS 0
+#endif
+/* [STATE] state-entry logs (RobotDebug_LogStateEntry / ROBOT_DEBUG_STATE). */
+#ifndef ROBOT_LOG_STATE
+#define ROBOT_LOG_STATE ROBOT_CHATTY_LOGS
+#endif
+/* [MOTOR] drive command + "(stop by <fn>)" control-change logs. */
+#ifndef ROBOT_LOG_MOTOR
+#define ROBOT_LOG_MOTOR ROBOT_CHATTY_LOGS
+#endif
+/* [TAPE] change-mask logs from the tape event checker. */
+#ifndef ROBOT_LOG_TAPE
+#define ROBOT_LOG_TAPE ROBOT_CHATTY_LOGS
+#endif
+/* [BUMP] change-mask logs from the bump event checker. */
+#ifndef ROBOT_LOG_BUMP
+#define ROBOT_LOG_BUMP ROBOT_CHATTY_LOGS
+#endif
+/* [NAV] per-event + align-start/done traces in NavigateToISZ. */
+#ifndef ROBOT_LOG_NAV
+#define ROBOT_LOG_NAV ROBOT_CHATTY_LOGS
+#endif
+/* [ALIGN] gyro heading + turn-direction traces while aligning. */
+#ifndef ROBOT_LOG_ALIGN
+#define ROBOT_LOG_ALIGN ROBOT_CHATTY_LOGS
+#endif
+/* [IMU] heading re-zero events (RobotIMU_ZeroHeading). */
+#ifndef ROBOT_LOG_IMU
+#define ROBOT_LOG_IMU ROBOT_CHATTY_LOGS
 #endif
 /* RealignedEvent EventParam: sensor path runs IMU zero + ref re-anchor in Navigate. */
 #define ALIGN_REALIGNED_SOURCE_MANUAL (0u)

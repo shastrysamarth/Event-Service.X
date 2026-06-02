@@ -12,7 +12,7 @@
 #include "RobotPlugPlay.h"
 #include "RobotSensors.h"
 
-#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_CHATTY_LOGS
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_NAV
 #define NAV_TRACE(...) printf(__VA_ARGS__)
 #else
 #define NAV_TRACE(...) ((void) 0)
@@ -230,6 +230,10 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
                 nextState = Forward3State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
+            } else {
+                /* Re-assert reverse so a transient stop cannot freeze us mid
+                 * traverse (we only command the motor on ES_ENTRY otherwise). */
+                RobotMotion_Reverse(MOTOR_SPEED_IPS);
             }
             break;
         case MisalignedEvent:

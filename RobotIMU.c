@@ -369,6 +369,11 @@ void RobotIMU_ZeroHeading(void)
     headingOffsetDeg = 0.0f;
 #endif
     headingDeg = 0.0f;
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_IMU
+    printf("[IMU] heading re-zeroed, new offset=");
+    PrintFloat100(headingOffsetDeg);
+    printf(" deg\r\n");
+#endif
 }
 
 void RobotIMU_ZeroPositionVelocity(void)

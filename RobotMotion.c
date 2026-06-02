@@ -84,7 +84,7 @@ static void LogMotionChange(void)
             (lastMotionPivot == prevLoggedPivot)) {
         return;
     }
-#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_CHATTY_LOGS
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_MOTOR
     if (caller != (const char *) 0) {
         printf("[MOTOR] control change: %s/%s -> %s/%s (stop by %s)\r\n",
                 prevLoggedCommand, prevLoggedPivot,
