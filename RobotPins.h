@@ -305,6 +305,13 @@
 
 #define BNO055_I2C_ADDRESS 0x28u
 #define BNO055_I2C_BAUD_HZ 100000u
+/* Bit-bang I2C half-clock delay: NOP spins per SCL edge in I2CDelay(). Lower =
+ * faster bus and shorter blocking per IMU read (BNO055 supports up to 400kHz).
+ * Was 220; reduced to speed up I2C. If the IMU stops responding (readOk=0),
+ * raise this back toward 220. Overridable from the build command line. */
+#ifndef I2C_HALF_CLOCK_NOPS
+#define I2C_HALF_CLOCK_NOPS 60u
+#endif
 
 /* BNO055 I2C hookup on the Uno32 stack. */
 #define BNO055_SDA_PIN_LABEL "V3"

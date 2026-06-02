@@ -606,7 +606,7 @@ static void BenchPrintSensor(BenchSensor_t sensor)
         break;
     case BENCH_SENSOR_IMU_GYRO: {
         uint32_t nowMs = TIMERS_GetTime();
-        RobotIMU_Update();
+        RobotIMU_UpdateGyro();
         RobotIMU_AccumulateGyro(nowMs - benchGyroAccumLastMs);
         benchGyroAccumLastMs = nowMs;
         RobotIMU_PrintGyroSnapshot();

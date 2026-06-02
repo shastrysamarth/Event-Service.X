@@ -143,11 +143,21 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
             if (((changedMask & TAPE_SENSOR_5_MASK) != 0u) &&
                     ((tapeMask & TAPE_SENSOR_5_MASK) != 0u) &&
                     (BEHIND_TAPE == FALSE)) {
-                /* First crossing of the line: back off so the front edge
-                 * sensors can re-acquire it cleanly. */
-                nextState = BackUpBehindTapeState;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
+                if (((tapeMask & TAPE_SENSOR_3_MASK) != 0u) &&
+                        ((tapeMask & TAPE_SENSOR_4_MASK) != 0u)) {
+                    /* Square on the front line: center + both edge sensors. */
+                    boundary_choice = BOUNDARY_TOP;
+                    RobotMotion_Stop();
+                    PostFoundFrontTape();
+                    ThisEvent.EventType = ES_NO_EVENT;
+                } else if (((tapeMask & TAPE_SENSOR_3_MASK) == 0u) &&
+                        ((tapeMask & TAPE_SENSOR_4_MASK) == 0u)) {
+                    /* First crossing with only center tape: back off so the
+                     * front edge sensors can re-acquire the line cleanly. */
+                    nextState = BackUpBehindTapeState;
+                    makeTransition = TRUE;
+                    ThisEvent.EventType = ES_NO_EVENT;
+                }
             } else if (((changedMask & TAPE_SENSOR_3_MASK) != 0u) &&
                     ((tapeMask & TAPE_SENSOR_3_MASK) != 0u)) {
                 boundary_choice = BOUNDARY_BOTTOM;

@@ -8,6 +8,7 @@ uint8_t RobotIMU_BeginNDOF(void);
 uint8_t RobotIMU_IsFullyCalibrated(void);
 
 void RobotIMU_Update(void);
+void RobotIMU_UpdateGyro(void);
 void RobotIMU_ZeroAll(void);
 void RobotIMU_ZeroHeading(void);
 void RobotIMU_LatchReferenceHeading(void);

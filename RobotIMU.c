@@ -62,6 +62,7 @@ static float zGyroDPS = 0.0f;
  * RobotIMU_AccumulateGyro(); used by the bench gyro stream. */
 static float gyroAccumDeg[3] = {0.0f, 0.0f, 0.0f};
 static uint32_t lastUpdateMs = 0;
+static uint32_t lastGyroUpdateMs = 0;
 static uint32_t lastModeCheckMs = 0;
 static uint16_t stationaryMs = 0u;
 static uint8_t isStationary = TRUE;
@@ -278,37 +279,26 @@ uint8_t RobotIMU_IsFullyCalibrated(void)
 void RobotIMU_Update(void)
 {
 #if ROBOT_PLUGPLAY_USE_BNO055
-    uint8_t buffer[6];
-    uint8_t gyroBuffer[6];
+    /* Hot path: read only the 2-byte heading (Euler H) to minimize the blocking
+     * bit-bang I2C transfer. Roll/pitch and the gyro block are read elsewhere
+     * (RobotIMU_UpdateGyro / RobotIMU_UpdateDebugData) since the control loop
+     * only needs heading. BNO055 EUL_Heading is the first Euler field, so it is
+     * at BNO055_EULER_H_LSB_REG (BNO055_HEADING_EULER_INDEX == 0). */
+    uint8_t headingBuf[2];
     uint32_t now = ES_Timer_GetTime();
-    uint32_t elapsedMs = now - lastUpdateMs;
-    int16_t headingGyroRaw;
-    uint8_t gyroIsStill;
 
     if (imuReady == FALSE) {
         lastUpdateMs = now;
         return;
     }
 
-    /* elapsedMs == 0 when ES_Timer_GetTime() is not running (bench/test modes
-     * that never call ES_Initialize()). Always attempt I2C reads regardless;
-     * only skip velocity/position integration when there is no time delta. */
     lastReadOk = TRUE;
 
-    if (BNO055ReadLen(BNO055_EULER_H_LSB_REG, buffer, 6u) == TRUE) {
-        StoreVector3(buffer, rawEuler);
+    if (BNO055ReadLen(BNO055_EULER_H_LSB_REG, headingBuf, 2u) == TRUE) {
+        rawEuler[0] = ReadS16(headingBuf);
         headingDeg = NormalizeHeading(((float) SelectHeadingEuler(rawEuler)) / 16.0f - headingOffsetDeg);
     } else {
         lastReadOk = FALSE;
-    }
-
-    if (BNO055ReadLen(BNO055_GYRO_DATA_X_LSB_REG, gyroBuffer, 6u) == TRUE) {
-        StoreVector3(gyroBuffer, rawGyro);
-        headingGyroRaw = SelectHeadingGyroAxis(rawGyro);
-        zGyroDPS = ((float) headingGyroRaw) / 16.0f;
-    } else {
-        lastReadOk = FALSE;
-        headingGyroRaw = SelectHeadingGyroAxis(rawGyro);
     }
 
     if ((lastModeCheckMs == 0u) ||
@@ -326,6 +316,35 @@ void RobotIMU_Update(void)
         lastModeWasNDOF = TRUE;
     }
 
+    lastUpdateMs = now;
+#endif
+}
+
+/* Reads the 6-byte gyro block and refreshes heading-rate + stationary state.
+ * Kept off RobotIMU_Update()'s hot path; call it only where gyro data is needed
+ * (e.g. the bench gyro stream). */
+void RobotIMU_UpdateGyro(void)
+{
+#if ROBOT_PLUGPLAY_USE_BNO055
+    uint8_t gyroBuffer[6];
+    uint32_t now = ES_Timer_GetTime();
+    uint32_t elapsedMs = now - lastGyroUpdateMs;
+    int16_t headingGyroRaw;
+    uint8_t gyroIsStill;
+
+    if (imuReady == FALSE) {
+        lastGyroUpdateMs = now;
+        return;
+    }
+
+    if (BNO055ReadLen(BNO055_GYRO_DATA_X_LSB_REG, gyroBuffer, 6u) == TRUE) {
+        StoreVector3(gyroBuffer, rawGyro);
+    } else {
+        lastReadOk = FALSE;
+    }
+    headingGyroRaw = SelectHeadingGyroAxis(rawGyro);
+    zGyroDPS = ((float) headingGyroRaw) / 16.0f;
+
     gyroIsStill = (AbsS16(headingGyroRaw) <= IMU_STILL_GYRO_RAW) ? TRUE : FALSE;
     if (gyroIsStill == TRUE) {
         if (stationaryMs < IMU_STATIONARY_CONFIRM_MS) {
@@ -339,7 +358,7 @@ void RobotIMU_Update(void)
         isStationary = FALSE;
     }
 
-    lastUpdateMs = now;
+    lastGyroUpdateMs = now;
 #endif
 }
 
@@ -502,6 +521,20 @@ static void RobotIMU_UpdateDebugData(void)
     }
 
     lastReadOk = TRUE;
+
+    /* Hot path only refreshes heading; pull full euler + gyro here so the debug
+     * snapshot's roll/pitch and gyro columns are current. */
+    if (BNO055ReadLen(BNO055_EULER_H_LSB_REG, buffer, 6u) == TRUE) {
+        StoreVector3(buffer, rawEuler);
+    } else {
+        lastReadOk = FALSE;
+    }
+    if (BNO055ReadLen(BNO055_GYRO_DATA_X_LSB_REG, buffer, 6u) == TRUE) {
+        StoreVector3(buffer, rawGyro);
+        zGyroDPS = ((float) SelectHeadingGyroAxis(rawGyro)) / 16.0f;
+    } else {
+        lastReadOk = FALSE;
+    }
 
     if (BNO055ReadLen(BNO055_LINEAR_ACCEL_DATA_X_LSB_REG, buffer, 6u) == TRUE) {
         StoreVector3(buffer, rawLinearAccel);
@@ -951,7 +984,7 @@ static void I2CDelay(void)
 {
     uint32_t count;
 
-    for (count = 0u; count < 220u; count++) {
+    for (count = 0u; count < I2C_HALF_CLOCK_NOPS; count++) {
         asm volatile("nop");
     }
 }
