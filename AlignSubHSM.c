@@ -329,7 +329,7 @@ void AlignSubHSM_UpdateControl(void)
 
     switch (CurrentState) {
     case GyroHeadingAlignState:
-        error = RobotIMU_GetHeadingErrorToZeroDeg();
+        error = RobotIMU_GetHeadingErrorToRefDeg();
         if (AbsFloat(error) <= HEADING_THRESHOLD_DEG) {
             RobotMotion_Stop();
             LogAlignAction("gyro-centered-stop", error);
@@ -349,7 +349,7 @@ void AlignSubHSM_UpdateControl(void)
         break;
     case TapeStraightPivotState:
         RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
-        LogAlignAction("straight-pivot-left", RobotIMU_GetHeadingErrorToZeroDeg());
+        LogAlignAction("straight-pivot-left", RobotIMU_GetHeadingErrorToRefDeg());
         break;
     case TapeStraightTranslateState:
         DriveStraightTranslate();
@@ -370,7 +370,7 @@ uint8_t AlignSubHSM_IsHeadingAligned(void)
         headingAlignedSamples = 0u;
         return FALSE;
     }
-    return StableCheck(AbsFloat(RobotIMU_GetHeadingErrorToZeroDeg()) <= HEADING_THRESHOLD_DEG,
+    return StableCheck(AbsFloat(RobotIMU_GetHeadingErrorToRefDeg()) <= HEADING_THRESHOLD_DEG,
             &headingAlignedSamples);
 }
 
@@ -497,7 +497,7 @@ static uint8_t StartTapeBranch(const TapeAlignBranch_t *branch,
     /* New branch: clear the change tracker so the first turn direction below
      * always prints, then announce the selected branch + target turn state. */
     lastAlignAction = "none";
-    headingError = RobotIMU_GetHeadingErrorToZeroDeg();
+    headingError = RobotIMU_GetHeadingErrorToRefDeg();
     printf("[ALIGN] branch sensors=%u+%u off pivot=tape%u headingError=",
             (unsigned int) branch->sensorA,
             (unsigned int) branch->sensorB,
@@ -512,7 +512,7 @@ static uint8_t StartTapeBranch(const TapeAlignBranch_t *branch,
 
 static AlignState_t TapeTurnStateForHeading(void)
 {
-    float error = RobotIMU_GetHeadingErrorToZeroDeg();
+    float error = RobotIMU_GetHeadingErrorToRefDeg();
 
     if (error > TAPE_ALIGN_HEADING_STRAIGHT_DEG) {
         return TapeTurnLeftState;
@@ -639,19 +639,19 @@ static void DriveStraightTranslate(void)
     switch (straightTranslateDir) {
     case STRAIGHT_TRANSLATE_FORWARD:
         RobotMotion_Forward(MOTOR_SPEED_IPS);
-        LogAlignAction("straight-forward", RobotIMU_GetHeadingErrorToZeroDeg());
+        LogAlignAction("straight-forward", RobotIMU_GetHeadingErrorToRefDeg());
         break;
     case STRAIGHT_TRANSLATE_REVERSE:
         RobotMotion_Reverse(MOTOR_SPEED_IPS);
-        LogAlignAction("straight-reverse", RobotIMU_GetHeadingErrorToZeroDeg());
+        LogAlignAction("straight-reverse", RobotIMU_GetHeadingErrorToRefDeg());
         break;
     case STRAIGHT_TRANSLATE_STRAFE_LEFT:
         RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
-        LogAlignAction("straight-strafe-left", RobotIMU_GetHeadingErrorToZeroDeg());
+        LogAlignAction("straight-strafe-left", RobotIMU_GetHeadingErrorToRefDeg());
         break;
     case STRAIGHT_TRANSLATE_STRAFE_RIGHT:
         RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
-        LogAlignAction("straight-strafe-right", RobotIMU_GetHeadingErrorToZeroDeg());
+        LogAlignAction("straight-strafe-right", RobotIMU_GetHeadingErrorToRefDeg());
         break;
     case STRAIGHT_TRANSLATE_NONE:
     default:
@@ -666,10 +666,10 @@ static void DriveTapeTurn(uint8_t turnLeft)
 
     if (turnLeft == TRUE) {
         RobotMotion_TurnLeftAbout(pivot, TURN_SPEED_IPS);
-        LogAlignAction("tape-turn-left", RobotIMU_GetHeadingErrorToZeroDeg());
+        LogAlignAction("tape-turn-left", RobotIMU_GetHeadingErrorToRefDeg());
     } else {
         RobotMotion_TurnRightAbout(pivot, TURN_SPEED_IPS);
-        LogAlignAction("tape-turn-right", RobotIMU_GetHeadingErrorToZeroDeg());
+        LogAlignAction("tape-turn-right", RobotIMU_GetHeadingErrorToRefDeg());
     }
 }
 

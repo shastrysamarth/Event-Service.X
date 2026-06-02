@@ -536,7 +536,7 @@ static uint8_t IsBeaconSearchActive(void)
 
 static uint8_t IsRobotMisaligned(void)
 {
-    float headingError = RobotIMU_GetHeadingErrorToZeroDeg();
+    float headingError = RobotIMU_GetHeadingErrorToRefDeg();
 
     /* Heading-only misalignment (DEPRECATED: position vs ref was IMU-based). */
     return (AbsFloat(headingError) > HEADING_THRESHOLD_DEG) ? TRUE : FALSE;

@@ -119,7 +119,6 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case InitPSubState:
         if (ThisEvent.EventType == ES_INIT) {
             RobotIMU_EnsureNDOF();
-            RobotIMU_ZeroHeading();
             RobotIMU_ZeroPositionVelocity();
             SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
             nextState = IsTop() ? InitialStrafeLeftState : InitialStrafeRightState;

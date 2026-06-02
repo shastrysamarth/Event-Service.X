@@ -10,12 +10,16 @@ uint8_t RobotIMU_IsFullyCalibrated(void);
 void RobotIMU_Update(void);
 void RobotIMU_ZeroAll(void);
 void RobotIMU_ZeroHeading(void);
+void RobotIMU_LatchReferenceHeading(void);
 void RobotIMU_ZeroPositionVelocity(void);
 
 float RobotIMU_GetHeadingDeg(void);
 float RobotIMU_GetXInches(void);
 float RobotIMU_GetYInches(void);
 float RobotIMU_GetHeadingErrorToZeroDeg(void);
+float RobotIMU_GetReferenceHeadingDeg(void);
+float RobotIMU_GetHeadingErrorToRefDeg(void);
+uint8_t RobotIMU_IsReferenceHeadingLatched(void);
 uint8_t RobotIMU_IsReady(void);
 float RobotIMU_GetHeadingOffsetDeg(void);
 float RobotIMU_GetXVelocityIPS(void);

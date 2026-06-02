@@ -46,6 +46,9 @@
 static uint8_t imuReady = FALSE;
 static uint8_t bnoAddress = BNO055_ADDR_LOW;
 static float headingOffsetDeg = 0.0f;
+/* Gyro heading target for ALIGN_MODE_GYRO after front tape is found. */
+static float headingRefDeg = 0.0f;
+static uint8_t headingRefLatched = FALSE;
 static float headingDeg = 0.0f;
 static float xInches = 0.0f;
 static float yInches = 0.0f;
@@ -362,6 +365,12 @@ void RobotIMU_ZeroHeading(void)
 #if ROBOT_PLUGPLAY_USE_BNO055
     int16_t headingRaw;
 
+    if (headingRefLatched == TRUE) {
+        /* Keep the latched physical heading target when re-zeroing short-horizon
+         * heading (e.g. on movement-axis changes). */
+        headingRefDeg -= headingDeg;
+    }
+
     if (ReadHeadingAxisRaw(&headingRaw) == TRUE) {
         headingOffsetDeg = ((float) headingRaw) / 16.0f;
     }
@@ -372,6 +381,24 @@ void RobotIMU_ZeroHeading(void)
 #if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_IMU
     printf("[IMU] heading re-zeroed, new offset=");
     PrintFloat100(headingOffsetDeg);
+    printf(" deg");
+    if (headingRefLatched == TRUE) {
+        printf(", ref=");
+        PrintFloat100(headingRefDeg);
+        printf(" deg");
+    }
+    printf("\r\n");
+#endif
+}
+
+void RobotIMU_LatchReferenceHeading(void)
+{
+    RobotIMU_Update();
+    headingRefDeg = headingDeg;
+    headingRefLatched = TRUE;
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_IMU
+    printf("[IMU] reference heading latched at ");
+    PrintFloat100(headingRefDeg);
     printf(" deg\r\n");
 #endif
 }
@@ -406,6 +433,21 @@ float RobotIMU_GetYInches(void)
 float RobotIMU_GetHeadingErrorToZeroDeg(void)
 {
     return SmallestHeadingError(0.0f, headingDeg);
+}
+
+float RobotIMU_GetReferenceHeadingDeg(void)
+{
+    return headingRefDeg;
+}
+
+float RobotIMU_GetHeadingErrorToRefDeg(void)
+{
+    return SmallestHeadingError(headingRefDeg, headingDeg);
+}
+
+uint8_t RobotIMU_IsReferenceHeadingLatched(void)
+{
+    return headingRefLatched;
 }
 
 uint8_t RobotIMU_IsReady(void)

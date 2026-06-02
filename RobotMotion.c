@@ -57,8 +57,10 @@ static void SetChassisVelocity(float vxIPS, float vyIPS, float omegaRadPerSec,
         float frontLeftScale, float frontRightScale,
         float rearLeftScale, float rearRightScale);
 static void SetDriveWheels(float frontLeft, float frontRight, float rearLeft, float rearRight);
+static void BrakeAllWheels(void);
 static void SetMotor(DriveMotor_t motor, int speedDuty);
 static void SetMotorDirection(DriveMotor_t motor, int forward);
+static void SetMotorBrake(DriveMotor_t motor);
 static int SpeedToDuty(float wheelSpeedIPS);
 static float AbsFloat(float value);
 static void PrintFixedInline(float value, const char *unit);
@@ -125,7 +127,8 @@ void RobotMotion_StopImpl(const char *caller)
     lastMotionCommand = "stop";
     lastMotionPivot = "none";
     LogMotionChange();
-    SetDriveWheels(0.0f, 0.0f, 0.0f, 0.0f);
+    /* Active (dynamic) braking instead of coasting: see BrakeAllWheels. */
+    BrakeAllWheels();
 }
 
 void RobotMotion_Forward(float speedIPS)
@@ -441,6 +444,27 @@ static void SetDriveWheels(float frontLeft, float frontRight, float rearLeft, fl
 #endif
 }
 
+static void BrakeAllWheels(void)
+{
+    lastFrontLeftIPS = 0.0f;
+    lastFrontRightIPS = 0.0f;
+    lastRearLeftIPS = 0.0f;
+    lastRearRightIPS = 0.0f;
+    lastFrontLeftDuty = 0;
+    lastFrontRightDuty = 0;
+    lastRearLeftDuty = 0;
+    lastRearRightDuty = 0;
+
+    SetMotorBrake(MOTOR_FRONT_LEFT);
+    SetMotorBrake(MOTOR_FRONT_RIGHT);
+    SetMotorBrake(MOTOR_REAR_LEFT);
+    SetMotorBrake(MOTOR_REAR_RIGHT);
+
+#if ROBOT_REALTIME_TRACE
+    printf("[MOTOR] brake (dynamic) FL/FR/RL/RR\r\n");
+#endif
+}
+
 static void SetMotor(DriveMotor_t motor, int speedDuty)
 {
 #if ROBOT_PLUGPLAY_USE_DRIVE_MOTORS
@@ -501,6 +525,42 @@ static void SetMotorDirection(DriveMotor_t motor, int forward)
 #else
     (void) motor;
     (void) forward;
+#endif
+}
+
+/* L298N dynamic braking (datasheet truth table): with ENA asserted (PWM high)
+ * and IN1 == IN2, the bridge shorts the motor leads so back-EMF actively brakes
+ * the wheel. Coasting (the old stop) instead drove ENA low, disconnecting the
+ * motor. We tie both direction pins low and drive the enable PWM to MAX_PWM. */
+static void SetMotorBrake(DriveMotor_t motor)
+{
+#if ROBOT_PLUGPLAY_USE_DRIVE_MOTORS
+    switch (motor) {
+    case MOTOR_FRONT_LEFT:
+        MOTOR_FL_IN1_LAT = 0;
+        MOTOR_FL_IN2_LAT = 0;
+        PWM_SetDutyCycle(MOTOR_FL_PWM_PIN, MAX_PWM);
+        break;
+    case MOTOR_FRONT_RIGHT:
+        MOTOR_FR_IN1_LAT = 0;
+        MOTOR_FR_IN2_LAT = 0;
+        PWM_SetDutyCycle(MOTOR_FR_PWM_PIN, MAX_PWM);
+        break;
+    case MOTOR_REAR_LEFT:
+        MOTOR_RL_IN1_LAT = 0;
+        MOTOR_RL_IN2_LAT = 0;
+        PWM_SetDutyCycle(MOTOR_RL_PWM_PIN, MAX_PWM);
+        break;
+    case MOTOR_REAR_RIGHT:
+        MOTOR_RR_IN1_LAT = 0;
+        MOTOR_RR_IN2_LAT = 0;
+        PWM_SetDutyCycle(MOTOR_RR_PWM_PIN, MAX_PWM);
+        break;
+    default:
+        break;
+    }
+#else
+    (void) motor;
 #endif
 }
 

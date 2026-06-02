@@ -64,7 +64,7 @@
  *     -DROBOT_CHATTY_LOGS=0 -DROBOT_LOG_MOTOR=1 -DROBOT_LOG_ALIGN=1
  * turns everything off except the motor-control and align traces. */
 #ifndef ROBOT_CHATTY_LOGS
-#define ROBOT_CHATTY_LOGS 0
+#define ROBOT_CHATTY_LOGS 1
 #endif
 /* [STATE] state-entry logs (RobotDebug_LogStateEntry / ROBOT_DEBUG_STATE). */
 #ifndef ROBOT_LOG_STATE

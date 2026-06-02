@@ -193,12 +193,12 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     case ConfirmForwardState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_Forward(MOTOR_SPEED_IPS);
-            /* If the partner edge is already on we are already square. */
+            /* Partner already on: square on the line, do not creep forward. */
             if ((LiveTapeMask() & confirmPartnerMask) != 0u) {
                 RobotMotion_Stop();
                 PostFoundFrontTape();
             } else {
+                RobotMotion_Forward(MOTOR_SPEED_IPS);
                 ES_Timer_InitTimer(FIND_FRONT_IMU_TIMER, FRONT_TAPE_CONFIRM_MS);
             }
             break;
@@ -337,6 +337,7 @@ static void PostFoundFrontTape(void)
 {
     ES_Event event;
 
+    RobotIMU_LatchReferenceHeading();
     event.EventType = FoundFrontTapeEvent;
     event.EventParam = (uint16_t) boundary_choice;
     PostRobotHSM(event);
