@@ -12,7 +12,10 @@ typedef enum {
 } AlignMode_t;
 
 uint8_t InitAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches);
-uint8_t InitGyroAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches);
+/* pivot selects the turn center for the granular gyro correction (e.g. pivot
+ * about the tape sensor the caller is tracking). */
+uint8_t InitGyroAlignSubHSM(MovementAxis_t axis, TurnPivot_t pivot,
+        float xRefInches, float yRefInches);
 uint8_t InitTapeAlignSubHSM(MovementAxis_t axis, BoundaryChoice_t boundary,
         float xRefInches, float yRefInches);
 ES_Event RunAlignSubHSM(ES_Event ThisEvent);

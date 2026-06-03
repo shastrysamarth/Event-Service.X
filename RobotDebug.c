@@ -111,6 +111,8 @@ void RobotDebug_PrintModuleVariables(void)
             BoundaryName(NavigateToISZ_GetBoundaryChoice()),
             MovementAxisName(NavigateToISZ_GetMovementAxis()),
             (unsigned int) NavigateToISZ_GetNumTapesCrossed());
+    PrintFixedValue("[VAR] NavigateToISZ.savedHeadingRef",
+            NavigateToISZ_GetSavedHeadingRefDeg(), "deg");
     printf("[VAR] Align.state=%s mode=%s axis=%s\r\n",
             AlignSubHSM_GetStateName(),
             AlignModeName(AlignSubHSM_GetMode()),

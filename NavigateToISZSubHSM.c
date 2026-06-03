@@ -4,6 +4,7 @@
 
 #include "AlignSubHSM.h"
 #include "ES_Framework.h"
+#include "ES_Timers.h"
 #include "RobotDebug.h"
 #include "RobotHSM.h"
 #include "RobotIMU.h"
@@ -18,63 +19,107 @@
 #define NAV_TRACE(...) ((void) 0)
 #endif
 
+/*
+ * NavigateToISZ (gyro-only rework)
+ * --------------------------------
+ * On entry the gyro heading is zeroed and that zero is latched as the global
+ * reference heading (savedHeadingRefDeg). Every alignment from here on is a
+ * GYRO align back to that single saved heading -- the tape-align HSM is no
+ * longer used (its code is left in place but deprecated).
+ *
+ * GyroAlign(X) below means: while in state X, a MisalignedEvent diverts into
+ * AlignState (gyro), and a RealignedEvent returns to X. The states that are
+ * gyro-aligned are Reverse1, StrafeLeft1, Reverse2, SearchStrafeRight,
+ * Reverse3 and SearchStrafeLeft.
+ *
+ * Flow:
+ *   Reverse1 --Tape1 on--> StrafeLeft1 --Tape3 on--> Reverse2
+ *
+ *   Reverse2 --Tape3 off--> Reverse2Wait(200ms)
+ *       Reverse2Wait --Tape5 on--> StrafeRight1 --Tape3 on--> Reverse2
+ *       Reverse2Wait --timeout--> StrafeLeft2  --Tape3 on--> Reverse2
+ *   Reverse2 --Bump3|4 on--> ForwardBump2(100ms, num_tapes_crossed=0)
+ *       ForwardBump2 --timeout--> SearchStrafeRight
+ *           SearchStrafeRight: count tape4 on->off cycles;
+ *               Tape4 on AND num_tapes_crossed==1 --> Reverse3
+ *   Reverse2 --Tape2 and Tape3 on--> Forward2(200ms) --> StrafeRight5in --> ReachedISZ
+ *
+ *   Reverse3 --Tape4 off--> Reverse3Wait(200ms)
+ *       Reverse3Wait --Tape5 on--> StrafeLeft3 --Tape4 on--> Reverse3
+ *       Reverse3Wait --timeout--> StrafeRight2 --Tape4 on--> Reverse3
+ *   Reverse3 --Bump3|4 on--> ForwardBump3(100ms, num_tapes_crossed=0)
+ *       ForwardBump3 --timeout--> SearchStrafeLeft
+ *           SearchStrafeLeft: count tape3 on->off cycles;
+ *               Tape3 on AND num_tapes_crossed==1 --> Reverse2
+ *   Reverse3 --Tape2 and Tape4 on--> Forward3(200ms) --> StrafeLeft5in --> ReachedISZ
+ */
 typedef enum {
     InitPSubState,
-    InitialStrafeLeftState,
-    InitialStrafeRightState,
     Reverse1State,
-    StrafeRight1State,
     StrafeLeft1State,
-    Forward1State,
     Reverse2State,
-    Forward2State,
-    Forward3State,
+    Reverse2WaitState,
+    StrafeRight1State,
     StrafeLeft2State,
-    StrafeRight2State,
+    ForwardBump2State,
+    SearchStrafeRightState,
+    Forward2State,
+    StrafeRight5State,
     Reverse3State,
+    Reverse3WaitState,
+    StrafeLeft3State,
+    StrafeRight2State,
+    ForwardBump3State,
+    SearchStrafeLeftState,
+    Forward3State,
+    StrafeLeft5State,
     AlignState,
 } NavigateState_t;
 
 static const char *StateNames[] = {
     "InitPSubState",
-    "InitialStrafeLeftState",
-    "InitialStrafeRightState",
     "Reverse1State",
-    "StrafeRight1State",
     "StrafeLeft1State",
-    "Forward1State",
     "Reverse2State",
-    "Forward2State",
-    "Forward3State",
+    "Reverse2WaitState",
+    "StrafeRight1State",
     "StrafeLeft2State",
-    "StrafeRight2State",
+    "ForwardBump2State",
+    "SearchStrafeRightState",
+    "Forward2State",
+    "StrafeRight5State",
     "Reverse3State",
+    "Reverse3WaitState",
+    "StrafeLeft3State",
+    "StrafeRight2State",
+    "ForwardBump3State",
+    "SearchStrafeLeftState",
+    "Forward3State",
+    "StrafeLeft5State",
     "AlignState",
 };
 
 static NavigateState_t CurrentState = InitPSubState;
 static NavigateState_t returnStateAfterAlign = InitPSubState;
 static BoundaryChoice_t boundary_choice = BOUNDARY_TOP;
-static MovementAxis_t movement_axis = MOVEMENT_AXIS_HORIZONTAL;
+static MovementAxis_t movement_axis = MOVEMENT_AXIS_VERTICAL;
+/* Heading reference saved (and latched into the IMU) on entry. All gyro aligns
+ * realign back to this single heading. */
+static float savedHeadingRefDeg = 0.0f;
+/* DEPRECATED: heading-only align no longer tracks per-axis position refs. */
 static float x_ref = 0.0f;
 static float y_ref = 0.0f;
 static uint8_t num_tapes_crossed = 0u;
-static uint8_t initialStrafeYRefLatched = 0u;
 
 static void SetMovementAxis(MovementAxis_t axis);
-static void LatchInitialStrafeYRefOnce(void);
-static void StartTapeCounting(void);
-static void CountTape5Crossing(void);
-static uint8_t IsTop(void);
-static uint8_t IsBottom(void);
 static uint8_t IsAlignableState(NavigateState_t state);
-static AlignMode_t AlignModeForState(NavigateState_t state);
 static uint8_t TapeRising(ES_Event event, uint8_t mask);
+static uint8_t TapeFalling(ES_Event event, uint8_t mask);
+static uint8_t TapeCurrentHasAll(ES_Event event, uint8_t mask);
 static uint8_t BumpRising(ES_Event event, uint8_t mask);
-static uint8_t BumpFalling(ES_Event event, uint8_t mask);
-static uint8_t TapeAlignNeededNow(void);
 static uint8_t HandleAlignTriggerEvent(ES_Event *event,
         NavigateState_t *nextState, uint8_t *makeTransition);
+static TurnPivot_t PivotForState(NavigateState_t state);
 static void BeginAlignForState(NavigateState_t state);
 static void AcceptCurrentAlignment(uint16_t sourceParam);
 static void PostReachedISZ(void);
@@ -84,10 +129,10 @@ uint8_t InitNavigateToISZSubHSM(BoundaryChoice_t startingBoundary)
     ES_Event returnEvent;
 
     boundary_choice = startingBoundary;
-    movement_axis = MOVEMENT_AXIS_HORIZONTAL;
+    movement_axis = MOVEMENT_AXIS_VERTICAL;
     x_ref = 0.0f;
     y_ref = 0.0f;
-    initialStrafeYRefLatched = 0u;
+    savedHeadingRefDeg = 0.0f;
     num_tapes_crossed = 0u;
     CurrentState = InitPSubState;
 
@@ -118,171 +163,33 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     switch (CurrentState) {
     case InitPSubState:
         if (ThisEvent.EventType == ES_INIT) {
+            /* Zero the gyro immediately, then latch that zero as the reference
+             * heading every gyro align returns to. */
             RobotIMU_EnsureNDOF();
             RobotIMU_ZeroPositionVelocity();
-            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-            nextState = IsTop() ? InitialStrafeLeftState : InitialStrafeRightState;
+            RobotIMU_ZeroHeading();
+            RobotIMU_LatchReferenceHeading();
+            savedHeadingRefDeg = RobotIMU_GetReferenceHeadingDeg();
+            NAV_TRACE("[NAV] entry: gyro zeroed, savedHeadingRef latched\r\n");
+            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+            nextState = Reverse1State;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
-        }
-        break;
-
-    case InitialStrafeLeftState:
-        switch (ThisEvent.EventType) {
-        case ES_ENTRY:
-            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
-            LatchInitialStrafeYRefOnce();
-            break;
-        case TapeChangedEvent:
-            if (TapeRising(ThisEvent, TAPE_SENSOR_2_MASK) == TRUE) {
-                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                num_tapes_crossed = 0u;
-                nextState = Reverse1State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            } else {
-                /* Keep driving toward the corner. We only command the motor on
-                 * ES_ENTRY, so any transient stop (e.g. an align hand-off or an
-                 * out-of-order command) would otherwise leave us frozen on the
-                 * tape forever. Re-asserting here is a no-op while already
-                 * strafing (RobotMotion dedups identical commands). */
-                RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
-            }
-            break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
-        default:
-            break;
-        }
-        break;
-
-    case InitialStrafeRightState:
-        switch (ThisEvent.EventType) {
-        case ES_ENTRY:
-            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
-            LatchInitialStrafeYRefOnce();
-            break;
-        case TapeChangedEvent:
-            if (TapeRising(ThisEvent, TAPE_SENSOR_2_MASK) == TRUE) {
-                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                num_tapes_crossed = 0u;
-                nextState = Reverse1State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            } else {
-                /* Re-assert strafe so a transient stop cannot freeze us. */
-                RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
-            }
-            break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
-        default:
-            break;
         }
         break;
 
     case Reverse1State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
             RobotMotion_Reverse(MOTOR_SPEED_IPS);
             break;
-        case Solenoid4OnEvent:
-        case Solenoid5OnEvent:
-        case Solenoid6OnEvent:
-            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-            StartTapeCounting();
-            nextState = IsTop() ? StrafeRight1State : StrafeLeft1State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
-        case BumpChangedEvent:
-            if (BumpRising(ThisEvent,
-                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
-                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                nextState = Forward1State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
-            break;
         case TapeChangedEvent:
-            if (IsBottom() && (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE)) {
-                RobotMotion_Stop();
-                RobotIMU_ZeroPositionVelocity();
-                RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, 1,
-                        DISTANCE_FORWARD_TO_ISZ_IN, MOTOR_SPEED_IPS);
-                nextState = Forward2State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            } else if (IsTop() && (TapeRising(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE)) {
-                RobotMotion_Stop();
-                RobotIMU_ZeroPositionVelocity();
-                RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, 1,
-                        DISTANCE_FORWARD_TO_ISZ_IN, MOTOR_SPEED_IPS);
-                nextState = Forward3State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            } else {
-                /* Re-assert reverse so a transient stop cannot freeze us mid
-                 * traverse (we only command the motor on ES_ENTRY otherwise). */
-                RobotMotion_Reverse(MOTOR_SPEED_IPS);
-            }
-            break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
-        default:
-            break;
-        }
-        break;
-
-    case StrafeRight1State:
-        switch (ThisEvent.EventType) {
-        case ES_ENTRY:
-            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
-            break;
-        case TapeChangedEvent:
-            if (TapeRising(ThisEvent, TAPE_SENSOR_5_MASK) == TRUE) {
-                CountTape5Crossing();
-                if (num_tapes_crossed >= 2u) {
-                    boundary_choice = BOUNDARY_BOTTOM;
-                    SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                    nextState = Reverse1State;
-                    makeTransition = TRUE;
-                }
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
-            break;
-        case BumpChangedEvent:
-            if (BumpRising(ThisEvent,
-                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
-                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                nextState = Forward1State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            } else if (BumpRising(ThisEvent,
-                    BUMP_SENSOR_1_MASK | BUMP_SENSOR_2_MASK) == TRUE) {
-                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                nextState = Reverse2State;
+            if (TapeRising(ThisEvent, TAPE_SENSOR_1_MASK) == TRUE) {
+                nextState = StrafeLeft1State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
-            break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
             break;
         default:
             break;
@@ -292,66 +199,15 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case StrafeLeft1State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
             RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             break;
         case TapeChangedEvent:
-            if (TapeRising(ThisEvent, TAPE_SENSOR_5_MASK) == TRUE) {
-                CountTape5Crossing();
-                if (num_tapes_crossed >= 2u) {
-                    boundary_choice = BOUNDARY_TOP;
-                    SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                    nextState = Reverse1State;
-                    makeTransition = TRUE;
-                }
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
-            break;
-        case BumpChangedEvent:
-            if (BumpRising(ThisEvent,
-                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
-                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-                nextState = Forward1State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            } else if (BumpRising(ThisEvent,
-                    BUMP_SENSOR_1_MASK | BUMP_SENSOR_2_MASK) == TRUE) {
-                SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+            if (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
                 nextState = Reverse2State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
-            break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
-        default:
-            break;
-        }
-        break;
-
-    case Forward1State:
-        switch (ThisEvent.EventType) {
-        case ES_ENTRY:
-            RobotMotion_Forward(MOTOR_SPEED_IPS);
-            break;
-        case BumpChangedEvent:
-            if (BumpFalling(ThisEvent,
-                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
-                SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-                StartTapeCounting();
-                nextState = IsTop() ? StrafeRight1State : StrafeLeft1State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
-            break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
             break;
         default:
             break;
@@ -361,69 +217,74 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case Reverse2State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
             RobotMotion_Reverse(MOTOR_SPEED_IPS);
             break;
-        case BumpChangedEvent:
-            if (BumpFalling(ThisEvent,
-                    BUMP_SENSOR_1_MASK | BUMP_SENSOR_2_MASK) == TRUE) {
-                SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-                StartTapeCounting();
-                nextState = IsBottom() ? StrafeLeft1State : StrafeRight1State;
+        case TapeChangedEvent:
+            if (TapeCurrentHasAll(ThisEvent,
+                    TAPE_SENSOR_2_MASK | TAPE_SENSOR_3_MASK) == TRUE) {
+                nextState = Forward2State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else if (TapeFalling(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
+                nextState = Reverse2WaitState;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case BumpChangedEvent:
+            if (BumpRising(ThisEvent,
+                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
+                nextState = ForwardBump2State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         default:
             break;
         }
         break;
 
-    case Forward2State:
+    case Reverse2WaitState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_Forward(MOTOR_SPEED_IPS);
+            RobotMotion_Reverse(MOTOR_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_TAPE5_WAIT_MS);
             break;
-        case DistanceMoveCompleteEvent:
-            RobotMotion_Stop();
-            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-            nextState = StrafeLeft2State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
             break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_5_MASK) == TRUE) {
+                nextState = StrafeRight1State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = StrafeLeft2State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         default:
             break;
         }
         break;
 
-    case Forward3State:
+    case StrafeRight1State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_Forward(MOTOR_SPEED_IPS);
-            break;
-        case DistanceMoveCompleteEvent:
-            RobotMotion_Stop();
             SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-            nextState = StrafeRight2State;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
             break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
+                nextState = Reverse2State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
             break;
         default:
             break;
@@ -433,50 +294,100 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case StrafeLeft2State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
             RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             break;
         case TapeChangedEvent:
-            if (TapeRising(ThisEvent, TAPE_SENSOR_1_MASK) == TRUE) {
-                RobotMotion_Stop();
-                RobotIMU_ZeroPositionVelocity();
-                RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, -1,
-                        DISTANCE_REVERSE_TO_SHOOT_IN, MOTOR_SPEED_IPS);
-                nextState = Reverse3State;
+            if (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
+                nextState = Reverse2State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
-            break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
             break;
         default:
             break;
         }
         break;
 
-    case StrafeRight2State:
+    case ForwardBump2State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+            num_tapes_crossed = 0u;
+            RobotMotion_Forward(MOTOR_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_FORWARD_AFTER_BUMP_MS);
             break;
-        case TapeChangedEvent:
-            if (TapeRising(ThisEvent, TAPE_SENSOR_1_MASK) == TRUE) {
-                RobotMotion_Stop();
-                RobotIMU_ZeroPositionVelocity();
-                RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_Y, -1,
-                        DISTANCE_REVERSE_TO_SHOOT_IN, MOTOR_SPEED_IPS);
-                nextState = Reverse3State;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = SearchStrafeRightState;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
+        default:
+            break;
+        }
+        break;
+
+    case SearchStrafeRightState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+            break;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
+                if (num_tapes_crossed >= 1u) {
+                    nextState = Reverse3State;
+                    makeTransition = TRUE;
+                }
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else if (TapeFalling(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
+                num_tapes_crossed++;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case Forward2State:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+            RobotMotion_Forward(MOTOR_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_FORWARD_TO_ISZ_MS);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = StrafeRight5State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case StrafeRight5State:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+            RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_X, 1,
+                    NAV_FINAL_STRAFE_IN, STRAFE_SPEED_IPS);
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+            break;
+        case DistanceMoveCompleteEvent:
+            RobotMotion_Stop();
+            PostReachedISZ();
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         default:
@@ -487,17 +398,177 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case Reverse3State:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
             RobotMotion_Reverse(MOTOR_SPEED_IPS);
+            break;
+        case TapeChangedEvent:
+            if (TapeCurrentHasAll(ThisEvent,
+                    TAPE_SENSOR_2_MASK | TAPE_SENSOR_4_MASK) == TRUE) {
+                nextState = Forward3State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else if (TapeFalling(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
+                nextState = Reverse3WaitState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        case BumpChangedEvent:
+            if (BumpRising(ThisEvent,
+                    BUMP_SENSOR_3_MASK | BUMP_SENSOR_4_MASK) == TRUE) {
+                nextState = ForwardBump3State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case Reverse3WaitState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            RobotMotion_Reverse(MOTOR_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_TAPE5_WAIT_MS);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_5_MASK) == TRUE) {
+                nextState = StrafeLeft3State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = StrafeRight2State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case StrafeLeft3State:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
+            break;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
+                nextState = Reverse3State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case StrafeRight2State:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+            break;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
+                nextState = Reverse3State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case ForwardBump3State:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+            num_tapes_crossed = 0u;
+            RobotMotion_Forward(MOTOR_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_FORWARD_AFTER_BUMP_MS);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = SearchStrafeLeftState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case SearchStrafeLeftState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
+            break;
+        case TapeChangedEvent:
+            if (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
+                if (num_tapes_crossed >= 1u) {
+                    nextState = Reverse2State;
+                    makeTransition = TRUE;
+                }
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else if (TapeFalling(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
+                num_tapes_crossed++;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case Forward3State:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
+            RobotMotion_Forward(MOTOR_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_FORWARD_TO_ISZ_MS);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = StrafeLeft5State;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case StrafeLeft5State:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+            RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_X, -1,
+                    NAV_FINAL_STRAFE_IN, STRAFE_SPEED_IPS);
+            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
             break;
         case DistanceMoveCompleteEvent:
             RobotMotion_Stop();
             PostReachedISZ();
-            ThisEvent.EventType = ES_NO_EVENT;
-            break;
-        case MisalignedEvent:
-            BeginAlignForState(CurrentState);
-            nextState = AlignState;
-            makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         default:
@@ -508,9 +579,6 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     case AlignState:
         ThisEvent = RunAlignSubHSM(ThisEvent);
         if (ThisEvent.EventType == RealignedEvent) {
-            /* Align is done: cancel the shared sweep timer so a stale timeout
-             * cannot fire after we hand control back to the strafe/drive state. */
-            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
             AcceptCurrentAlignment(ThisEvent.EventParam);
             NAV_TRACE("[NAV] align-done -> %s (src=%u)\r\n",
                     StateNames[returnStateAfterAlign],
@@ -549,16 +617,14 @@ uint8_t NavigateToISZ_IsAligning(void)
 
 uint8_t NavigateToISZ_AllowsAlign(void)
 {
-    /* Both align modes react to heading drift now: tape align squares the
-     * heading (jitter turns) before its tape sweep, so MisalignedEvent must be
-     * allowed to fire in any alignable driving state. */
     return IsAlignableState(CurrentState);
 }
 
+/* DEPRECATED: the gyro-only rework counts corner tapes (sensor 3/4), not the
+ * old sensor-5 sweep, so there is no tape-5 counting stage anymore. */
 uint8_t NavigateToISZ_IsCountingTape5(void)
 {
-    return ((CurrentState == StrafeRight1State) ||
-            (CurrentState == StrafeLeft1State)) ? TRUE : FALSE;
+    return FALSE;
 }
 
 MovementAxis_t NavigateToISZ_GetMovementAxis(void)
@@ -566,11 +632,13 @@ MovementAxis_t NavigateToISZ_GetMovementAxis(void)
     return movement_axis;
 }
 
+/* DEPRECATED: heading-only align no longer keeps a per-axis position ref. */
 float NavigateToISZ_GetXRef(void)
 {
     return x_ref;
 }
 
+/* DEPRECATED: heading-only align no longer keeps a per-axis position ref. */
 float NavigateToISZ_GetYRef(void)
 {
     return y_ref;
@@ -591,71 +659,30 @@ uint8_t NavigateToISZ_GetNumTapesCrossed(void)
     return num_tapes_crossed;
 }
 
+float NavigateToISZ_GetSavedHeadingRefDeg(void)
+{
+    return savedHeadingRefDeg;
+}
+
+/* Display/debug only: alignment now keys purely off the saved heading, so the
+ * movement axis no longer re-zeros heading the way the old rework did. */
 static void SetMovementAxis(MovementAxis_t axis)
 {
-    if (movement_axis != axis) {
-        movement_axis = axis;
-        if (movement_axis == MOVEMENT_AXIS_HORIZONTAL) {
-            y_ref = RobotIMU_GetYInches();
-        } else {
-            x_ref = RobotIMU_GetXInches();
-        }
-        RobotIMU_ZeroHeading();
-    }
-}
-
-static void StartTapeCounting(void)
-{
-    num_tapes_crossed = 0u;
-}
-
-static void CountTape5Crossing(void)
-{
-    num_tapes_crossed++;
-}
-
-static uint8_t IsTop(void)
-{
-    return (boundary_choice == BOUNDARY_TOP) ? TRUE : FALSE;
-}
-
-static uint8_t IsBottom(void)
-{
-    return (boundary_choice == BOUNDARY_BOTTOM) ? TRUE : FALSE;
+    movement_axis = axis;
 }
 
 static uint8_t IsAlignableState(NavigateState_t state)
 {
     switch (state) {
-    case InitialStrafeLeftState:
-    case InitialStrafeRightState:
     case Reverse1State:
-    case StrafeRight1State:
     case StrafeLeft1State:
-    case Forward1State:
     case Reverse2State:
-    case Forward2State:
-    case Forward3State:
-    case StrafeLeft2State:
-    case StrafeRight2State:
+    case SearchStrafeRightState:
     case Reverse3State:
+    case SearchStrafeLeftState:
         return TRUE;
     default:
         return FALSE;
-    }
-}
-
-static AlignMode_t AlignModeForState(NavigateState_t state)
-{
-    switch (state) {
-    case InitialStrafeLeftState:
-    case InitialStrafeRightState:
-    case Reverse1State:
-    case Forward2State:
-    case Forward3State:
-        return ALIGN_MODE_TAPE;
-    default:
-        return ALIGN_MODE_GYRO;
     }
 }
 
@@ -672,6 +699,30 @@ static uint8_t TapeRising(ES_Event event, uint8_t mask)
     return ((currentMask & changedMask & mask) != 0u) ? TRUE : FALSE;
 }
 
+static uint8_t TapeFalling(ES_Event event, uint8_t mask)
+{
+    uint8_t currentMask;
+    uint8_t changedMask;
+
+    if (event.EventType != TapeChangedEvent) {
+        return FALSE;
+    }
+    currentMask = TAPE_EVENT_CURRENT_MASK(event.EventParam);
+    changedMask = TAPE_EVENT_CHANGED_MASK(event.EventParam);
+    return ((changedMask & (uint8_t) ~currentMask & mask) != 0u) ? TRUE : FALSE;
+}
+
+static uint8_t TapeCurrentHasAll(ES_Event event, uint8_t mask)
+{
+    uint8_t currentMask;
+
+    if (event.EventType != TapeChangedEvent) {
+        return FALSE;
+    }
+    currentMask = TAPE_EVENT_CURRENT_MASK(event.EventParam);
+    return ((currentMask & mask) == mask) ? TRUE : FALSE;
+}
+
 static uint8_t BumpRising(ES_Event event, uint8_t mask)
 {
     uint8_t currentMask;
@@ -685,31 +736,14 @@ static uint8_t BumpRising(ES_Event event, uint8_t mask)
     return ((currentMask & changedMask & mask) != 0u) ? TRUE : FALSE;
 }
 
-static uint8_t BumpFalling(ES_Event event, uint8_t mask)
-{
-    uint8_t currentMask;
-    uint8_t changedMask;
-
-    if (event.EventType != BumpChangedEvent) {
-        return FALSE;
-    }
-    currentMask = BUMP_EVENT_CURRENT_MASK(event.EventParam);
-    changedMask = BUMP_EVENT_CHANGED_MASK(event.EventParam);
-    return ((changedMask & (uint8_t) ~currentMask & mask) != 0u) ? TRUE : FALSE;
-}
-
 static uint8_t HandleAlignTriggerEvent(ES_Event *event,
         NavigateState_t *nextState, uint8_t *makeTransition)
 {
-    AlignMode_t mode;
-
     if (IsAlignableState(CurrentState) == FALSE) {
         return FALSE;
     }
 
-    mode = AlignModeForState(CurrentState);
-    if ((mode == ALIGN_MODE_GYRO) &&
-            (event->EventType == MisalignedEvent)) {
+    if (event->EventType == MisalignedEvent) {
         BeginAlignForState(CurrentState);
         *nextState = AlignState;
         *makeTransition = TRUE;
@@ -717,75 +751,46 @@ static uint8_t HandleAlignTriggerEvent(ES_Event *event,
         return TRUE;
     }
 
-    if (mode == ALIGN_MODE_TAPE) {
-        /* Divert to a tape-align when the heading drifts off the global
-         * reference (MisalignedEvent) OR center sensor 5 leaves the line
-         * (TapeAlignNeededNow). Tape align jitter-squares the heading first,
-         * then sweeps the axis to put tape 5 back and watches the corner
-         * sensor, so the gyro trigger is loop-safe. */
-        if (((event->EventType == ES_ENTRY) ||
-                (event->EventType == TapeChangedEvent)) &&
-                (TapeAlignNeededNow() == TRUE)) {
-            BeginAlignForState(CurrentState);
-            *nextState = AlignState;
-            *makeTransition = TRUE;
-            event->EventType = ES_NO_EVENT;
-            return TRUE;
-        }
-        if (event->EventType == MisalignedEvent) {
-            BeginAlignForState(CurrentState);
-            *nextState = AlignState;
-            *makeTransition = TRUE;
-            event->EventType = ES_NO_EVENT;
-            return TRUE;
-        }
-    }
-
     return FALSE;
 }
 
-static uint8_t TapeAlignNeededNow(void)
+/* Pivot the gyro correction about the tape sensor the state is tracking:
+ * tape 3 (left of center) -> left-center, tape 4 (right of center) ->
+ * right-center, and an ambiguous state (e.g. the first reverse) -> the center
+ * tape (sensor 5). */
+static TurnPivot_t PivotForState(NavigateState_t state)
 {
-    /* The rewritten tape align keys entirely off center sensor 5: align is
-     * needed whenever sensor 5 has left the line. */
-    if (RobotPlugPlay_IsTapeEnabled(5u) == FALSE) {
-        return FALSE;
+    switch (state) {
+    case StrafeLeft1State:
+    case Reverse2State:
+    case SearchStrafeLeftState:
+        return TURN_PIVOT_LEFT_CENTER;
+    case Reverse3State:
+    case SearchStrafeRightState:
+        return TURN_PIVOT_RIGHT_CENTER;
+    case Reverse1State:
+    default:
+        return TURN_PIVOT_CENTER;
     }
-
-    return (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == FALSE) ? TRUE : FALSE;
 }
 
 static void BeginAlignForState(NavigateState_t state)
 {
-    AlignMode_t mode = AlignModeForState(state);
-
     returnStateAfterAlign = state;
     RobotMotion_PauseDistanceMove();
-    NAV_TRACE("[NAV] align-start from=%s mode=%s axis=%s "
-            "tape s1=%d s2=%d s3=%d s4=%d s5=%d\r\n",
-            StateNames[state],
-            (mode == ALIGN_MODE_TAPE) ? "tape" : "gyro",
-            (movement_axis == MOVEMENT_AXIS_VERTICAL) ? "V" : "H",
-            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_1),
-            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_2),
-            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_3),
-            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_4),
-            (int) RobotSensors_IsTapeOn(TAPE_SENSOR_5));
-    if (mode == ALIGN_MODE_TAPE) {
-        InitTapeAlignSubHSM(movement_axis, boundary_choice, x_ref, y_ref);
-    } else {
-        InitGyroAlignSubHSM(movement_axis, x_ref, y_ref);
-    }
+    /* Active-brake the current drive command before the align takes over. */
+    RobotMotion_Stop();
+    NAV_TRACE("[NAV] gyro-align-start from=%s\r\n", StateNames[state]);
+    /* Gyro align only uses the latched reference heading; the x/y refs are
+     * passed for API compatibility and ignored by the heading control. */
+    InitGyroAlignSubHSM(movement_axis, PivotForState(state), x_ref, y_ref);
 }
 
 static void AcceptCurrentAlignment(uint16_t sourceParam)
 {
-    if (sourceParam == (uint16_t) ALIGN_REALIGNED_SOURCE_SENSOR) {
-        /* Stable align satisfied in hardware: reset short-horizon odometry and refs together. */
-        RobotIMU_ZeroPositionVelocity();
-        x_ref = RobotIMU_GetXInches();
-        y_ref = RobotIMU_GetYInches();
-    }
+    /* Heading is back on the saved reference; nothing to re-anchor. Resume any
+     * paused distance move (e.g. the final ISZ strafe). */
+    (void) sourceParam;
     RobotMotion_ResumeDistanceMove();
 }
 
@@ -796,12 +801,4 @@ static void PostReachedISZ(void)
     event.EventType = ReachedISZEvent;
     event.EventParam = 0u;
     PostRobotHSM(event);
-}
-
-static void LatchInitialStrafeYRefOnce(void)
-{
-    if (initialStrafeYRefLatched == 0u) {
-        y_ref = RobotIMU_GetYInches();
-        initialStrafeYRefLatched = 1u;
-    }
 }

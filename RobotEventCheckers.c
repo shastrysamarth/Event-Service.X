@@ -478,21 +478,12 @@ uint8_t CheckAlignEvents(void)
         return FALSE;
     }
 
-    AlignSubHSM_UpdateControl();
-
-    /* DEPRECATED: position-align completion (PositionRealignedEvent) no longer posted here. */
-#if 0
-    if (AlignSubHSM_IsPositionStage() && AlignSubHSM_IsPositionAligned()) {
-        return PostEvent(PositionRealignedEvent, 0u);
-    }
-#endif
-
-    if (AlignSubHSM_IsHeadingStage() && AlignSubHSM_IsHeadingAligned())
-    {
-        LogIMUEvent(RealignedEvent);
-        return PostEvent(RealignedEvent, ALIGN_REALIGNED_SOURCE_SENSOR);
-    }
-
+    /* DEPRECATED: gyro align is no longer driven (or completed) from here. It
+     * now runs as granular turn/brake pulses inside GyroHeadingAlignState and
+     * returns RealignedEvent to its caller when the heading error is within
+     * GYRO_ALIGN_STRAIGHT_DEG. Driving it continuously here overshot badly, and
+     * posting RealignedEvent at the looser HEADING_THRESHOLD_DEG short-circuited
+     * the tighter completion target. */
     return FALSE;
 }
 

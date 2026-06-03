@@ -20,7 +20,15 @@
 #define ALIGN_LOG_ENABLED 0
 #endif
 
-/* Tape align (rewritten again to catch corner cases):
+/* DEPRECATED: TAPE ALIGN MODE IS NO LONGER USED.
+ *
+ * The NavigateToISZ rework aligns purely with the gyro (GYRO mode below) back
+ * to a single heading latched on entry. The tape-align state machine
+ * (TapeHeadingAlignState / TapeSearchPrimaryState / TapeSearchSecondaryState /
+ * TapeJitterState), InitTapeAlignSubHSM(), and their helpers are retained for
+ * reference but are now dead code -- nothing calls InitTapeAlignSubHSM().
+ *
+ * Tape align (rewritten again to catch corner cases):
  *
  *  Entered when center sensor 5 leaves the line. The robot runs a widening
  *  back-and-forth sweep along one axis to put sensor 5 back on the line, and
@@ -79,6 +87,9 @@ static AlignState_t CurrentState = InitPAlignState;
 static AlignMode_t alignMode = ALIGN_MODE_GYRO;
 static MovementAxis_t alignAxis = MOVEMENT_AXIS_HORIZONTAL;
 static BoundaryChoice_t alignBoundary = BOUNDARY_TOP;
+/* Pivot used by the granular gyro correction turns (set per align so we can
+ * rotate about the tape sensor the caller is tracking). */
+static TurnPivot_t gyroPivot = TURN_PIVOT_CENTER;
 static float xRef = 0.0f;
 static float yRef = 0.0f;
 static uint8_t headingAlignedSamples = 0u;
@@ -93,6 +104,8 @@ static uint8_t cornerSensor = 2u;
 static uint8_t cornerSeen = FALSE;
 /* Jitter alternates a drive pulse and an active-brake pulse. */
 static uint8_t jitterBraking = FALSE;
+/* Gyro align pulse counter (watchdog against infinite pulse loops). */
+static uint8_t gyroAlignPulseCount = 0u;
 #if ALIGN_LOG_ENABLED
 /* Last commanded action we logged, so [ALIGN] prints only on a change. Stable
  * string literals, so pointer comparison is enough. */
@@ -109,6 +122,9 @@ static uint8_t CornerIsOn(void);
 static uint8_t CenterTapeIsOn(void);
 static uint8_t Tape5Edge(ES_Event event, uint8_t wantOn);
 static uint8_t CornerSensorForAlign(void);
+static uint8_t GyroHeadingIsStraight(void);
+static uint16_t GyroTurnPulseMs(void);
+static void IssueGyroHeadingTurn(void);
 static uint8_t TapeHeadingIsStraight(void);
 static void IssueTapeHeadingTurn(void);
 static void IssueTapeSearchMotion(uint8_t primary);
@@ -120,14 +136,19 @@ static void LogAlignAction(const char *action, float headingErrDeg);
 
 uint8_t InitAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches)
 {
-    return InitGyroAlignSubHSM(axis, xRefInches, yRefInches);
+    return InitGyroAlignSubHSM(axis, TURN_PIVOT_CENTER, xRefInches, yRefInches);
 }
 
-uint8_t InitGyroAlignSubHSM(MovementAxis_t axis, float xRefInches, float yRefInches)
+uint8_t InitGyroAlignSubHSM(MovementAxis_t axis, TurnPivot_t pivot,
+        float xRefInches, float yRefInches)
 {
+    /* Active-brake any prior drive command before the align takes over. */
+    RobotMotion_Stop();
+    gyroPivot = pivot;
     return InitAlignCommon(ALIGN_MODE_GYRO, axis, BOUNDARY_TOP, xRefInches, yRefInches);
 }
 
+/* DEPRECATED: tape align is no longer used (gyro-only NavigateToISZ rework). */
 uint8_t InitTapeAlignSubHSM(MovementAxis_t axis, BoundaryChoice_t boundary,
         float xRefInches, float yRefInches)
 {
@@ -153,9 +174,59 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
         break;
 
     case GyroHeadingAlignState:
+        /* Granular correction: short turn pulse about gyroPivot, then an active
+         * brake/settle, repeated until the heading error is within
+         * GYRO_ALIGN_STRAIGHT_DEG. jitterBraking marks the brake half of the
+         * cycle. Completion is signalled by returning RealignedEvent up to the
+         * caller (NavigateToISZ / ShootingSubHSM) on a settle timeout. */
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            AlignSubHSM_UpdateControl();
+            if (GyroHeadingIsStraight() == TRUE) {
+                /* Already squared: brake and let the next settle complete (the
+                 * entry return value is discarded by the transition code). */
+                RobotMotion_Stop();
+                jitterBraking = TRUE;
+                ES_Timer_InitTimer(NAV_SETTLE_TIMER, GYRO_ALIGN_BRAKE_MS);
+            } else {
+                jitterBraking = FALSE;
+                gyroAlignPulseCount = 0u;
+                IssueGyroHeadingTurn();
+                ES_Timer_InitTimer(NAV_SETTLE_TIMER, GyroTurnPulseMs());
+            }
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                if (jitterBraking == FALSE) {
+                    /* End the turn pulse with an active brake, then rest so the
+                     * heading reading settles before we re-evaluate it. */
+                    RobotMotion_Stop();
+                    jitterBraking = TRUE;
+                    ES_Timer_InitTimer(NAV_SETTLE_TIMER, GYRO_ALIGN_BRAKE_MS);
+                    ThisEvent.EventType = ES_NO_EVENT;
+                } else {
+                    jitterBraking = FALSE;
+                    RobotIMU_Update();
+                    if ((GyroHeadingIsStraight() == TRUE) ||
+                            (gyroAlignPulseCount >= GYRO_ALIGN_MAX_PULSES)) {
+                        RobotMotion_Stop();
+                        ThisEvent.EventType = RealignedEvent;
+                        ThisEvent.EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
+#if ALIGN_LOG_ENABLED
+                        if (gyroAlignPulseCount >= GYRO_ALIGN_MAX_PULSES) {
+                            printf("[ALIGN] gyro-align max pulses (%u), exiting\r\n",
+                                    (unsigned int) GYRO_ALIGN_MAX_PULSES);
+                        }
+#endif
+                    } else {
+                        IssueGyroHeadingTurn();
+                        ES_Timer_InitTimer(NAV_SETTLE_TIMER, GyroTurnPulseMs());
+                        ThisEvent.EventType = ES_NO_EVENT;
+                    }
+                }
+            }
             break;
         case PositionRealignedEvent:
             ThisEvent.EventType = ES_NO_EVENT;
@@ -375,6 +446,7 @@ uint8_t AlignSubHSM_IsHeadingStage(void)
     return (CurrentState == GyroHeadingAlignState) ? TRUE : FALSE;
 }
 
+/* DEPRECATED: tape align stages are unreachable in the gyro-only rework. */
 uint8_t AlignSubHSM_IsTapeStage(void)
 {
     return ((CurrentState == TapeHeadingAlignState) ||
@@ -383,27 +455,11 @@ uint8_t AlignSubHSM_IsTapeStage(void)
             (CurrentState == TapeJitterState)) ? TRUE : FALSE;
 }
 
+/* DEPRECATED: gyro align used to be driven continuously from the event checker
+ * (CheckAlignEvents) which overshot badly. Gyro align is now self-driven by the
+ * granular turn/brake pulses inside GyroHeadingAlignState, so this is a no-op. */
 void AlignSubHSM_UpdateControl(void)
 {
-    float error;
-
-    /* Only GYRO mode is driven continuously here. Tape align is timer-driven
-     * inside RunAlignSubHSM (search runs and jitter pulses). */
-    if (CurrentState != GyroHeadingAlignState) {
-        return;
-    }
-
-    error = RobotIMU_GetHeadingErrorToRefDeg();
-    if (AbsFloat(error) <= HEADING_THRESHOLD_DEG) {
-        RobotMotion_Stop();
-        LogAlignAction("gyro-centered-stop", error);
-    } else if (error > 0.0f) {
-        RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
-        LogAlignAction("gyro-turn-left", error);
-    } else {
-        RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, TURN_SPEED_IPS);
-        LogAlignAction("gyro-turn-right", error);
-    }
 }
 
 uint8_t AlignSubHSM_IsPositionAligned(void)
@@ -470,6 +526,7 @@ static uint8_t InitAlignCommon(AlignMode_t mode, MovementAxis_t axis,
     cornerSensor = CornerSensorForAlign();
     cornerSeen = FALSE;
     jitterBraking = FALSE;
+    gyroAlignPulseCount = 0u;
     /* Snapshot the tape sensors so the corner rising-edge can be detected when
      * align finishes. */
     tapeEntryMask = LiveTapeMask();
@@ -540,6 +597,63 @@ static uint8_t CornerIsOn(void)
 static uint8_t CenterTapeIsOn(void)
 {
     return (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) ? TRUE : FALSE;
+}
+
+static uint8_t GyroHeadingIsStraight(void)
+{
+    return (AbsFloat(RobotIMU_GetHeadingErrorToRefDeg()) <=
+            GYRO_ALIGN_STRAIGHT_DEG) ? TRUE : FALSE;
+}
+
+/* Turn pulse length grows with |heading error| between MIN and MAX so tiny
+ * errors get short nudges and larger misalignments get a bit more rotation per
+ * step without reverting to a continuous turn. */
+static uint16_t GyroTurnPulseMs(void)
+{
+    float err = AbsFloat(RobotIMU_GetHeadingErrorToRefDeg());
+    float span;
+    float scaled;
+    uint16_t extra;
+
+    if (err <= GYRO_ALIGN_STRAIGHT_DEG) {
+        return GYRO_ALIGN_TURN_PULSE_MIN_MS;
+    }
+
+    span = HEADING_THRESHOLD_DEG - GYRO_ALIGN_STRAIGHT_DEG;
+    if (span < 0.5f) {
+        span = 0.5f;
+    }
+    scaled = (err - GYRO_ALIGN_STRAIGHT_DEG) / span;
+    if (scaled > 1.0f) {
+        scaled = 1.0f;
+    }
+
+    extra = (uint16_t) (scaled *
+            (float) (GYRO_ALIGN_TURN_PULSE_MAX_MS - GYRO_ALIGN_TURN_PULSE_MIN_MS) +
+            0.5f);
+    return (uint16_t) (GYRO_ALIGN_TURN_PULSE_MIN_MS + extra);
+}
+
+/* One granular heading-correction pulse about gyroPivot. Positive error
+ * (heading right of the saved reference) turns left, negative turns right.
+ * Heading is measured against the latched reference and never zeroed here. */
+static void IssueGyroHeadingTurn(void)
+{
+    float error = RobotIMU_GetHeadingErrorToRefDeg();
+
+    gyroAlignPulseCount++;
+    if (error > 0.0f) {
+        RobotMotion_TurnLeftAbout(gyroPivot, ALIGN_SPEED_IPS);
+        LogAlignAction("gyro-pulse-left", error);
+    } else {
+        RobotMotion_TurnRightAbout(gyroPivot, ALIGN_SPEED_IPS);
+        LogAlignAction("gyro-pulse-right", error);
+    }
+#if ALIGN_LOG_ENABLED
+    printf("[ALIGN] gyro pulse %ums (pulse %u)\r\n",
+            (unsigned int) GyroTurnPulseMs(),
+            (unsigned int) gyroAlignPulseCount);
+#endif
 }
 
 static uint8_t TapeHeadingIsStraight(void)

@@ -60,7 +60,7 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     case InitPShootState:
         if (ThisEvent.EventType == ES_INIT) {
             RobotStepper_Disable();
-            InitGyroAlignSubHSM(MOVEMENT_AXIS_HORIZONTAL, 0.0f, 0.0f);
+            InitGyroAlignSubHSM(MOVEMENT_AXIS_HORIZONTAL, TURN_PIVOT_CENTER, 0.0f, 0.0f);
             nextState = AlignBeforeSearchState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -104,7 +104,7 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
             break;
         case MisalignedEvent:
             RobotMotion_Stop();
-            InitGyroAlignSubHSM(MOVEMENT_AXIS_HORIZONTAL, 0.0f, 0.0f);
+            InitGyroAlignSubHSM(MOVEMENT_AXIS_HORIZONTAL, TURN_PIVOT_CENTER, 0.0f, 0.0f);
             nextState = AlignBeforeSearchState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;

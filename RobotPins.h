@@ -38,6 +38,19 @@
 #define POSITION_THRESHOLD_IN 0.75f
 #define HEADING_THRESHOLD_DEG 3.0f
 #define TAPE_ALIGN_HEADING_STRAIGHT_DEG 1.5f
+/* Gyro align (granular pulse/brake): turn pulse length scales with |heading
+ * error| between MIN and MAX so small corrections stay fine-grained but the
+ * motors still break static friction (2 ms was too short and never moved).
+ * BRAKE_MS should be >= ~2x ROBOT_IMU_UPDATE_PERIOD_MS so the heading sample
+ * after each pulse is fresh. MAX_PULSES is a watchdog if the robot cannot
+ * converge. */
+#define GYRO_ALIGN_STRAIGHT_DEG 1.25f
+#define GYRO_ALIGN_TURN_PULSE_MIN_MS 28u
+#define GYRO_ALIGN_TURN_PULSE_MAX_MS 55u
+#define GYRO_ALIGN_BRAKE_MS 50u
+#define GYRO_ALIGN_MAX_PULSES 40u
+/* DEPRECATED name: use GYRO_ALIGN_TURN_PULSE_MIN_MS / _MAX_MS instead. */
+#define GYRO_ALIGN_TURN_PULSE_MS GYRO_ALIGN_TURN_PULSE_MIN_MS
 #define TAPE_ALIGN_SWEEP_TIMER_MS 300u
 /* Tape align heading-correction turn slice: motors stall below ~4 IPS, so the
  * heading is squared in short pulse/rest cycles instead of a continuous turn. */
@@ -104,8 +117,21 @@
 /* RealignedEvent EventParam: sensor path runs IMU zero + ref re-anchor in Navigate. */
 #define ALIGN_REALIGNED_SOURCE_MANUAL (0u)
 #define ALIGN_REALIGNED_SOURCE_SENSOR (1u)
+/* DEPRECATED with the gyro-only NavigateToISZ rework: the old corner-approach
+ * distance moves are no longer used by NavigateToISZSubHSM. */
 #define DISTANCE_FORWARD_TO_ISZ_IN 10.0f
 #define DISTANCE_REVERSE_TO_SHOOT_IN 3.0f
+
+/* NavigateToISZ (gyro-only rework) timings.
+ *   NAV_TAPE5_WAIT_MS    : after a corner tape drops, wait this long for the
+ *                          center tape (sensor 5) before sweeping the far way.
+ *   NAV_FORWARD_AFTER_BUMP_MS : short forward nudge off a bumped wall.
+ *   NAV_FORWARD_TO_ISZ_MS     : forward creep before the final ISZ strafe.
+ *   NAV_FINAL_STRAFE_IN       : open-loop strafe distance into the ISZ. */
+#define NAV_TAPE5_WAIT_MS 800u
+#define NAV_FORWARD_AFTER_BUMP_MS 100u
+#define NAV_FORWARD_TO_ISZ_MS 200u
+#define NAV_FINAL_STRAFE_IN 5.0f
 
 /* Tape event params use bit = 1 when that tape sensor is on tape. */
 #define TAPE_SENSOR_1_MASK (1u << 0)
