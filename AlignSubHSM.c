@@ -130,6 +130,7 @@ static void IssueTapeHeadingTurn(void);
 static void IssueTapeSearchMotion(uint8_t primary);
 static void IssueTapeJitterMotion(void);
 static void EnterTapeSearch(uint8_t primary);
+static void CompleteGyroRealign(ES_Event *event);
 static void CompleteTapeRealign(ES_Event *event);
 static void PrintFixedDeg(float value);
 static void LogAlignAction(const char *action, float headingErrDeg);
@@ -181,6 +182,7 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
          * caller (NavigateToISZ / ShootingSubHSM) on a settle timeout. */
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
+            RobotIMU_UpdateGyroHeading();
             if (GyroHeadingIsStraight() == TRUE) {
                 /* Already squared: brake and let the next settle complete (the
                  * entry return value is discarded by the transition code). */
@@ -203,17 +205,16 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
                     /* End the turn pulse with an active brake, then rest so the
                      * heading reading settles before we re-evaluate it. */
                     RobotMotion_Stop();
+                    RobotIMU_UpdateGyroHeading();
                     jitterBraking = TRUE;
                     ES_Timer_InitTimer(NAV_SETTLE_TIMER, GYRO_ALIGN_BRAKE_MS);
                     ThisEvent.EventType = ES_NO_EVENT;
                 } else {
                     jitterBraking = FALSE;
-                    RobotIMU_Update();
+                    RobotIMU_UpdateGyroHeading();
                     if ((GyroHeadingIsStraight() == TRUE) ||
                             (gyroAlignPulseCount >= GYRO_ALIGN_MAX_PULSES)) {
-                        RobotMotion_Stop();
-                        ThisEvent.EventType = RealignedEvent;
-                        ThisEvent.EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
+                        CompleteGyroRealign(&ThisEvent);
 #if ALIGN_LOG_ENABLED
                         if (gyroAlignPulseCount >= GYRO_ALIGN_MAX_PULSES) {
                             printf("[ALIGN] gyro-align max pulses (%u), exiting\r\n",
@@ -601,7 +602,7 @@ static uint8_t CenterTapeIsOn(void)
 
 static uint8_t GyroHeadingIsStraight(void)
 {
-    return (AbsFloat(RobotIMU_GetHeadingErrorToRefDeg()) <=
+    return (AbsFloat(RobotIMU_GetGyroHeadingErrorToRefDeg()) <=
             GYRO_ALIGN_STRAIGHT_DEG) ? TRUE : FALSE;
 }
 
@@ -610,7 +611,7 @@ static uint8_t GyroHeadingIsStraight(void)
  * step without reverting to a continuous turn. */
 static uint16_t GyroTurnPulseMs(void)
 {
-    float err = AbsFloat(RobotIMU_GetHeadingErrorToRefDeg());
+    float err = AbsFloat(RobotIMU_GetGyroHeadingErrorToRefDeg());
     float span;
     float scaled;
     uint16_t extra;
@@ -639,7 +640,10 @@ static uint16_t GyroTurnPulseMs(void)
  * Heading is measured against the latched reference and never zeroed here. */
 static void IssueGyroHeadingTurn(void)
 {
-    float error = RobotIMU_GetHeadingErrorToRefDeg();
+    float error;
+
+    RobotIMU_UpdateGyroHeading();
+    error = RobotIMU_GetGyroHeadingErrorToRefDeg();
 
     gyroAlignPulseCount++;
     if (error > 0.0f) {
@@ -755,6 +759,34 @@ static void EnterTapeSearch(uint8_t primary)
     IssueTapeSearchMotion(primary);
     ES_Timer_InitTimer(NAV_SETTLE_TIMER, alignTimerMs);
     alignTimerMs = (uint16_t) (alignTimerMs + ALIGN_TIMER_STEP_MS);
+}
+
+static void CompleteGyroRealign(ES_Event *event)
+{
+    uint8_t tape2Mask = TAPE_SENSOR_2_MASK;
+    uint8_t liveMask;
+    uint8_t tape2Changed;
+
+    RobotMotion_Stop();
+
+    liveMask = LiveTapeMask();
+    tape2Changed = (((tapeEntryMask ^ liveMask) & tape2Mask) != 0u) ?
+            TRUE : FALSE;
+    if (tape2Changed == TRUE) {
+        ES_Event tapeEvent;
+
+        tapeEvent.EventType = TapeChangedEvent;
+        tapeEvent.EventParam = TAPE_EVENT_MAKE_PARAM(liveMask, tape2Mask);
+        PostRobotHSM(tapeEvent);
+#if ALIGN_LOG_ENABLED
+        printf("[ALIGN] tape2 change synthesized across gyro align entry=0x%02X exit=0x%02X\r\n",
+                (unsigned int) tapeEntryMask,
+                (unsigned int) liveMask);
+#endif
+    }
+
+    event->EventType = RealignedEvent;
+    event->EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;
 }
 
 /* Stop, mark the event as Realigned, and synthesize the corner-sensor rising

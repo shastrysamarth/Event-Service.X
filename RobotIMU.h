@@ -9,6 +9,7 @@ uint8_t RobotIMU_IsFullyCalibrated(void);
 
 void RobotIMU_Update(void);
 void RobotIMU_UpdateGyro(void);
+void RobotIMU_UpdateGyroHeading(void);
 void RobotIMU_ZeroAll(void);
 void RobotIMU_ZeroHeading(void);
 void RobotIMU_LatchReferenceHeading(void);
@@ -20,6 +21,8 @@ float RobotIMU_GetYInches(void);
 float RobotIMU_GetHeadingErrorToZeroDeg(void);
 float RobotIMU_GetReferenceHeadingDeg(void);
 float RobotIMU_GetHeadingErrorToRefDeg(void);
+float RobotIMU_GetGyroHeadingDeg(void);
+float RobotIMU_GetGyroHeadingErrorToRefDeg(void);
 uint8_t RobotIMU_IsReferenceHeadingLatched(void);
 uint8_t RobotIMU_IsReady(void);
 float RobotIMU_GetHeadingOffsetDeg(void);
@@ -37,6 +40,7 @@ void RobotIMU_PrintGyroSnapshot(void);
  * angle (deg). Reset the running total with RobotIMU_ResetGyroAccum(). */
 void RobotIMU_AccumulateGyro(uint32_t dtMs);
 void RobotIMU_ResetGyroAccum(void);
+void RobotIMU_ResetGyroHeading(void);
 void RobotIMU_SetDebugStream(uint8_t enabled);
 void RobotIMU_ToggleDebugStream(void);
 uint8_t RobotIMU_IsDebugStreamEnabled(void);

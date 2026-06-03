@@ -117,7 +117,8 @@ void RobotDebug_PrintModuleVariables(void)
             AlignSubHSM_GetStateName(),
             AlignModeName(AlignSubHSM_GetMode()),
             MovementAxisName(AlignSubHSM_GetAxis()));
-    PrintFixedValue("[VAR] Align.headingError", RobotIMU_GetHeadingErrorToRefDeg(), "deg");
+    PrintFixedValue("[VAR] Align.gyroHeadingError",
+            RobotIMU_GetGyroHeadingErrorToRefDeg(), "deg");
     printf("[VAR] Shooting.state=%s maxBeaconADC=%u targetStep=%d currentStep=%d\r\n",
             ShootingSubHSM_GetStateName(),
             (unsigned int) ShootingSubHSM_GetMaxBeaconADC(),
@@ -160,6 +161,9 @@ void RobotDebug_PrintModuleVariables(void)
     PrintFixedValue("[VAR] IMU.headingOffset", RobotIMU_GetHeadingOffsetDeg(), "deg");
     PrintFixedValue("[VAR] IMU.headingRef", RobotIMU_GetReferenceHeadingDeg(), "deg");
     PrintFixedValue("[VAR] IMU.headingErrorToRef", RobotIMU_GetHeadingErrorToRefDeg(), "deg");
+    PrintFixedValue("[VAR] IMU.gyroHeading", RobotIMU_GetGyroHeadingDeg(), "deg");
+    PrintFixedValue("[VAR] IMU.gyroHeadingErrorToRef",
+            RobotIMU_GetGyroHeadingErrorToRefDeg(), "deg");
     PrintFixedValue("[VAR] IMU.headingErrorToZero", RobotIMU_GetHeadingErrorToZeroDeg(), "deg");
     PrintFixedValue("[VAR] IMU.x", RobotIMU_GetXInches(), "in");
     PrintFixedValue("[VAR] IMU.y", RobotIMU_GetYInches(), "in");

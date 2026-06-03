@@ -44,7 +44,7 @@
  * BRAKE_MS should be >= ~2x ROBOT_IMU_UPDATE_PERIOD_MS so the heading sample
  * after each pulse is fresh. MAX_PULSES is a watchdog if the robot cannot
  * converge. */
-#define GYRO_ALIGN_STRAIGHT_DEG 1.25f
+#define GYRO_ALIGN_STRAIGHT_DEG 1.5f
 #define GYRO_ALIGN_TURN_PULSE_MIN_MS 28u
 #define GYRO_ALIGN_TURN_PULSE_MAX_MS 55u
 #define GYRO_ALIGN_BRAKE_MS 50u
@@ -123,13 +123,14 @@
 #define DISTANCE_REVERSE_TO_SHOOT_IN 3.0f
 
 /* NavigateToISZ (gyro-only rework) timings.
- *   NAV_TAPE5_WAIT_MS    : after a corner tape drops, wait this long for the
- *                          center tape (sensor 5) before sweeping the far way.
+ *   NAV_TAPE_RECOVERY_NUDGE_MS : fixed safe-side nudge after tape 3/4 drops.
  *   NAV_FORWARD_AFTER_BUMP_MS : short forward nudge off a bumped wall.
+ *   NAV_BUMP_CROSS_STRAFE_MS : open-loop cross-field strafe after bump.
  *   NAV_FORWARD_TO_ISZ_MS     : forward creep before the final ISZ strafe.
  *   NAV_FINAL_STRAFE_IN       : open-loop strafe distance into the ISZ. */
-#define NAV_TAPE5_WAIT_MS 800u
+#define NAV_TAPE_RECOVERY_NUDGE_MS 500u
 #define NAV_FORWARD_AFTER_BUMP_MS 100u
+#define NAV_BUMP_CROSS_STRAFE_MS 1500u
 #define NAV_FORWARD_TO_ISZ_MS 200u
 #define NAV_FINAL_STRAFE_IN 5.0f
 

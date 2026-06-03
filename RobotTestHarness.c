@@ -110,6 +110,15 @@ static void BenchPrintSensor(BenchSensor_t sensor);
 static void BenchPrintTape(TapeSensor_t sensor, const char *name, const char *pinLabel);
 static void BenchPrintBump(BumpSensor_t sensor, const char *name, const char *pinLabel);
 static void BenchPrintBeacon(void);
+#ifdef ROBOT_IMU_ALIGN_BENCH
+static void BenchZeroGyroHeading(void);
+static void BenchPrintGyroHeading(const char *label);
+static void BenchRunGyroAlignTest(void);
+static uint16_t BenchGyroTurnPulseMs(void);
+static void BenchWaitMs(uint16_t waitMs);
+static void BenchPrintFloat100(float value);
+static float BenchAbsFloat(float value);
+#endif
 
 static float benchMotorSpeedIPS = MOTOR_BENCH_SPEED_IPS;
 static uint8_t benchMotorSequenceStep = 0u;
@@ -117,6 +126,9 @@ static uint16_t activeSensorMask = 0u;
 static char activeDriveCommandKey = '\0';
 static uint32_t benchSampleSeq = 0u;
 static uint32_t benchGyroAccumLastMs = 0u;
+#ifdef ROBOT_IMU_ALIGN_BENCH
+static uint8_t benchGyroHeadingTracking = FALSE;
+#endif
 
 
 void RobotTestHarness_RunMotorSensorBench(void)
@@ -144,6 +156,11 @@ void RobotTestHarness_RunMotorSensorBench(void)
         }
 
         now = TIMERS_GetTime();
+#ifdef ROBOT_IMU_ALIGN_BENCH
+        if (benchGyroHeadingTracking == TRUE) {
+            RobotIMU_UpdateGyroHeading();
+        }
+#endif
 
 #if BENCH_SENSOR_PERIOD_MS == 0u
         /* Stream on every pass so the print rate tracks the sampling rate. */
@@ -168,6 +185,9 @@ static void BenchPrintHelp(void)
     printf("[BENCH] enabled streams print every loop pass (n=seq) to show read rate\r\n");
     printf("[BENCH] ? help, ! hardware pin map, . print active sensors once\r\n");
     printf("[IMU] I toggle gyro stream (x/y/z dps, heading rate, accum deg)\r\n");
+#ifdef ROBOT_IMU_ALIGN_BENCH
+    printf("[IMU] Z zero gyro heading here, A jitter-align back to that zero\r\n");
+#endif
     printf("[SENSOR] toggle streams: t/y/u/i/o tape 1/2/3/4/5\r\n");
     printf("[SENSOR] toggle streams: f/g/h/j bump FR/FL/RR/RL, b beacon\r\n");
     printf("[SENSOR] p toggle all sensors, l turn all sensor streams off\r\n");
@@ -216,6 +236,14 @@ static uint8_t BenchHandleSensorKey(char key)
     case 'I':
         BenchToggleSensor(BENCH_SENSOR_IMU_GYRO, "imuGyro");
         return TRUE;
+#ifdef ROBOT_IMU_ALIGN_BENCH
+    case 'Z':
+        BenchZeroGyroHeading();
+        return TRUE;
+    case 'A':
+        BenchRunGyroAlignTest();
+        return TRUE;
+#endif
     case 'p':
         activeSensorMask = (activeSensorMask == BENCH_SENSOR_ALL_MASK) ? 0u :
                 BENCH_SENSOR_ALL_MASK;
@@ -272,6 +300,9 @@ static void BenchToggleSensor(BenchSensor_t sensor, const char *name)
         if (sensor == BENCH_SENSOR_IMU_GYRO) {
             /* Zero the integrated angle so each enable starts a fresh sweep. */
             RobotIMU_ResetGyroAccum();
+#ifdef ROBOT_IMU_ALIGN_BENCH
+            RobotIMU_ResetGyroHeading();
+#endif
             benchGyroAccumLastMs = TIMERS_GetTime();
         }
         BenchPrintSensor(sensor);
@@ -606,7 +637,11 @@ static void BenchPrintSensor(BenchSensor_t sensor)
         break;
     case BENCH_SENSOR_IMU_GYRO: {
         uint32_t nowMs = TIMERS_GetTime();
+#ifdef ROBOT_IMU_ALIGN_BENCH
+        RobotIMU_UpdateGyroHeading();
+#else
         RobotIMU_UpdateGyro();
+#endif
         RobotIMU_AccumulateGyro(nowMs - benchGyroAccumLastMs);
         benchGyroAccumLastMs = nowMs;
         RobotIMU_PrintGyroSnapshot();
@@ -647,6 +682,140 @@ static void BenchPrintBeacon(void)
             (unsigned int) RobotSensors_BeaconDistanceFeetFromADC(smoothADC),
             BEACON_ADC_PIN_LABEL);
 }
+
+#ifdef ROBOT_IMU_ALIGN_BENCH
+static void BenchZeroGyroHeading(void)
+{
+    RobotMotion_Stop();
+    RobotIMU_UpdateGyroHeading();
+    RobotIMU_ResetGyroHeading();
+    benchGyroHeadingTracking = TRUE;
+    RobotIMU_UpdateGyroHeading();
+    BenchPrintGyroHeading("zeroed");
+}
+
+static void BenchPrintGyroHeading(const char *label)
+{
+    printf("[IMU_ALIGN] %s gyroHeading=", label);
+    BenchPrintFloat100(RobotIMU_GetGyroHeadingDeg());
+    printf(" err=");
+    BenchPrintFloat100(RobotIMU_GetGyroHeadingErrorToRefDeg());
+    printf(" deg rate=");
+    BenchPrintFloat100(RobotIMU_GetZGyroDPS());
+    printf(" dps\r\n");
+}
+
+static void BenchRunGyroAlignTest(void)
+{
+    uint8_t pulseCount = 0u;
+
+    RobotMotion_Stop();
+    benchGyroHeadingTracking = TRUE;
+    RobotIMU_UpdateGyroHeading();
+    BenchPrintGyroHeading("align start");
+
+    while ((BenchAbsFloat(RobotIMU_GetGyroHeadingErrorToRefDeg()) >
+            GYRO_ALIGN_STRAIGHT_DEG) &&
+            (pulseCount < GYRO_ALIGN_MAX_PULSES)) {
+        float error = RobotIMU_GetGyroHeadingErrorToRefDeg();
+        uint16_t pulseMs = BenchGyroTurnPulseMs();
+
+        pulseCount++;
+        if (error > 0.0f) {
+            RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, ALIGN_SPEED_IPS);
+            printf("[IMU_ALIGN] pulse %u left %ums\r\n",
+                    (unsigned int) pulseCount,
+                    (unsigned int) pulseMs);
+        } else {
+            RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, ALIGN_SPEED_IPS);
+            printf("[IMU_ALIGN] pulse %u right %ums\r\n",
+                    (unsigned int) pulseCount,
+                    (unsigned int) pulseMs);
+        }
+
+        BenchWaitMs(pulseMs);
+        RobotMotion_Stop();
+        RobotIMU_UpdateGyroHeading();
+        BenchPrintGyroHeading("after turn");
+        BenchWaitMs(GYRO_ALIGN_BRAKE_MS);
+        RobotIMU_UpdateGyroHeading();
+        BenchPrintGyroHeading("after brake");
+
+        if (!IsReceiveEmpty()) {
+            char key = GetChar();
+            if ((key == 'x') || (key == 'X')) {
+                RobotMotion_Stop();
+                printf("[IMU_ALIGN] aborted\r\n");
+                return;
+            }
+        }
+    }
+
+    RobotMotion_Stop();
+    if (pulseCount >= GYRO_ALIGN_MAX_PULSES) {
+        printf("[IMU_ALIGN] max pulses reached\r\n");
+    }
+    BenchPrintGyroHeading("align done");
+}
+
+static uint16_t BenchGyroTurnPulseMs(void)
+{
+    float err = BenchAbsFloat(RobotIMU_GetGyroHeadingErrorToRefDeg());
+    float span;
+    float scaled;
+    uint16_t extra;
+
+    if (err <= GYRO_ALIGN_STRAIGHT_DEG) {
+        return GYRO_ALIGN_TURN_PULSE_MIN_MS;
+    }
+
+    span = HEADING_THRESHOLD_DEG - GYRO_ALIGN_STRAIGHT_DEG;
+    if (span < 0.5f) {
+        span = 0.5f;
+    }
+    scaled = (err - GYRO_ALIGN_STRAIGHT_DEG) / span;
+    if (scaled > 1.0f) {
+        scaled = 1.0f;
+    }
+
+    extra = (uint16_t) (scaled *
+            (float) (GYRO_ALIGN_TURN_PULSE_MAX_MS - GYRO_ALIGN_TURN_PULSE_MIN_MS) +
+            0.5f);
+    return (uint16_t) (GYRO_ALIGN_TURN_PULSE_MIN_MS + extra);
+}
+
+static void BenchWaitMs(uint16_t waitMs)
+{
+    uint32_t start = TIMERS_GetTime();
+
+    while ((uint32_t) (TIMERS_GetTime() - start) < waitMs) {
+        RobotIMU_UpdateGyroHeading();
+    }
+}
+
+static void BenchPrintFloat100(float value)
+{
+    int32_t scaled = (int32_t) (value * 100.0f);
+    uint32_t magnitude;
+
+    if (scaled < 0) {
+        magnitude = (uint32_t) (-scaled);
+        printf("-%lu.%02lu",
+                (unsigned long) (magnitude / 100u),
+                (unsigned long) (magnitude % 100u));
+    } else {
+        magnitude = (uint32_t) scaled;
+        printf("%lu.%02lu",
+                (unsigned long) (magnitude / 100u),
+                (unsigned long) (magnitude % 100u));
+    }
+}
+
+static float BenchAbsFloat(float value)
+{
+    return (value < 0.0f) ? -value : value;
+}
+#endif
 #endif
 
 #ifdef ROBOT_BEACON_TEST

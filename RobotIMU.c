@@ -50,6 +50,8 @@ static float headingOffsetDeg = 0.0f;
 static float headingRefDeg = 0.0f;
 static uint8_t headingRefLatched = FALSE;
 static float headingDeg = 0.0f;
+static float gyroHeadingDeg = 0.0f;
+static float gyroHeadingRefDeg = 0.0f;
 static float xInches = 0.0f;
 static float yInches = 0.0f;
 static float xVelocityIPS = 0.0f;
@@ -63,6 +65,8 @@ static float zGyroDPS = 0.0f;
 static float gyroAccumDeg[3] = {0.0f, 0.0f, 0.0f};
 static uint32_t lastUpdateMs = 0;
 static uint32_t lastGyroUpdateMs = 0;
+static uint32_t gyroHeadingLastMs = 0;
+static uint8_t gyroHeadingRunning = FALSE;
 static uint32_t lastModeCheckMs = 0;
 static uint16_t stationaryMs = 0u;
 static uint8_t isStationary = TRUE;
@@ -362,6 +366,21 @@ void RobotIMU_UpdateGyro(void)
 #endif
 }
 
+void RobotIMU_UpdateGyroHeading(void)
+{
+#if ROBOT_PLUGPLAY_USE_BNO055
+    uint32_t now = ES_Timer_GetTime();
+    uint32_t elapsedMs = gyroHeadingRunning ? (now - gyroHeadingLastMs) : 0u;
+    float dtSec;
+
+    RobotIMU_UpdateGyro();
+    dtSec = ((float) elapsedMs) / 1000.0f;
+    gyroHeadingDeg = NormalizeHeading(gyroHeadingDeg + (zGyroDPS * dtSec));
+    gyroHeadingLastMs = now;
+    gyroHeadingRunning = TRUE;
+#endif
+}
+
 void RobotIMU_ZeroAll(void)
 {
 #if ROBOT_PLUGPLAY_USE_BNO055
@@ -374,6 +393,7 @@ void RobotIMU_ZeroAll(void)
     headingOffsetDeg = 0.0f;
 #endif
     headingDeg = 0.0f;
+    RobotIMU_ResetGyroHeading();
     RobotIMU_ZeroPositionVelocity();
     lastUpdateMs = ES_Timer_GetTime();
     lastModeCheckMs = 0u;
@@ -397,6 +417,7 @@ void RobotIMU_ZeroHeading(void)
     headingOffsetDeg = 0.0f;
 #endif
     headingDeg = 0.0f;
+    RobotIMU_ResetGyroHeading();
 #if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_IMU
     printf("[IMU] heading re-zeroed, new offset=");
     PrintFloat100(headingOffsetDeg);
@@ -414,6 +435,8 @@ void RobotIMU_LatchReferenceHeading(void)
 {
     RobotIMU_Update();
     headingRefDeg = headingDeg;
+    RobotIMU_ResetGyroHeading();
+    gyroHeadingRefDeg = gyroHeadingDeg;
     headingRefLatched = TRUE;
 #if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_IMU
     printf("[IMU] reference heading latched at ");
@@ -462,6 +485,16 @@ float RobotIMU_GetReferenceHeadingDeg(void)
 float RobotIMU_GetHeadingErrorToRefDeg(void)
 {
     return SmallestHeadingError(headingRefDeg, headingDeg);
+}
+
+float RobotIMU_GetGyroHeadingDeg(void)
+{
+    return gyroHeadingDeg;
+}
+
+float RobotIMU_GetGyroHeadingErrorToRefDeg(void)
+{
+    return SmallestHeadingError(gyroHeadingRefDeg, gyroHeadingDeg);
 }
 
 uint8_t RobotIMU_IsReferenceHeadingLatched(void)
@@ -681,6 +714,14 @@ void RobotIMU_ResetGyroAccum(void)
     gyroAccumDeg[2] = 0.0f;
 }
 
+void RobotIMU_ResetGyroHeading(void)
+{
+    gyroHeadingDeg = 0.0f;
+    gyroHeadingRefDeg = 0.0f;
+    gyroHeadingLastMs = ES_Timer_GetTime();
+    gyroHeadingRunning = TRUE;
+}
+
 void RobotIMU_AccumulateGyro(uint32_t dtMs)
 {
 #if ROBOT_PLUGPLAY_USE_BNO055
@@ -711,6 +752,12 @@ void RobotIMU_PrintGyroSnapshot(void)
     PrintFloat100(gyroAccumDeg[1]);
     printf("/");
     PrintFloat100(gyroAccumDeg[2]);
+#ifdef ROBOT_IMU_ALIGN_BENCH
+    printf(" deg gyroHeading=");
+    PrintFloat100(gyroHeadingDeg);
+    printf(" err=");
+    PrintFloat100(RobotIMU_GetGyroHeadingErrorToRefDeg());
+#endif
     printf(" deg\r\n");
 #else
     printf("[IMU] BNO055 disabled\r\n");

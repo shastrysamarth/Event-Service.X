@@ -58,6 +58,7 @@ MP_EXTRA_CC_PRE += -I"."
 #   make ROBOT_DEBUG=1    -> enable state-entry logs
 #   make ROBOT_TEST=1     -> enable keyboard event injection and state logs
 #   make MOTOR_SENSOR_TEST=1 -> direct motor/sensor bench harness, no HSM
+#   make MOTOR_SENSOR_TEST=1 IMU_ALIGN_BENCH=1 -> add gyro-zero/jitter-align bench keys
 #   make BEACON_TEST=1 -> direct beacon ADC smoothing harness, no HSM
 #   make GPIO_HIGH_TEST=1 -> set connector GPIO pins high for probing
 #   make ROBOT_TRACE=1    -> enable verbose framework Run... trace output
@@ -77,6 +78,10 @@ MP_EXTRA_CC_PRE += -DROBOT_MOTOR_SENSOR_TEST -DROBOT_DEBUG \
     -DROBOT_HW_USE_DRIVE_MOTORS -DROBOT_HW_USE_TAPE \
     -DROBOT_HW_USE_BUMP -DROBOT_HW_USE_BEACON_ADC \
     -DROBOT_HW_USE_SHOOTER_MOTOR -DROBOT_HW_USE_STEPPER
+endif
+
+ifdef IMU_ALIGN_BENCH
+MP_EXTRA_CC_PRE += -DROBOT_IMU_ALIGN_BENCH
 endif
 
 ifdef BEACON_TEST

@@ -22,35 +22,34 @@
 /*
  * NavigateToISZ (gyro-only rework)
  * --------------------------------
- * On entry the gyro heading is zeroed and that zero is latched as the global
- * reference heading (savedHeadingRefDeg). Every alignment from here on is a
- * GYRO align back to that single saved heading -- the tape-align HSM is no
- * longer used (its code is left in place but deprecated).
+ * On entry the gyro heading reference latched by FindFrontTape is preserved as
+ * savedHeadingRefDeg. Every alignment from here on is a GYRO align back to
+ * that single saved heading -- the tape-align HSM is no longer used (its code
+ * is left in place but deprecated).
  *
  * GyroAlign(X) below means: while in state X, a MisalignedEvent diverts into
  * AlignState (gyro), and a RealignedEvent returns to X. The states that are
  * gyro-aligned are Reverse1, StrafeLeft1, Reverse2, SearchStrafeRight,
- * Reverse3 and SearchStrafeLeft.
+ * Reverse3 and SearchStrafeLeft. The fixed 1500ms cross-field strafe states
+ * are intentionally not interrupted by align so their timer cannot restart.
  *
  * Flow:
  *   Reverse1 --Tape1 on--> StrafeLeft1 --Tape3 on--> Reverse2
  *
- *   Reverse2 --Tape3 off--> Reverse2Wait(200ms)
- *       Reverse2Wait --Tape5 on--> StrafeRight1 --Tape3 on--> Reverse2
- *       Reverse2Wait --timeout--> StrafeLeft2  --Tape3 on--> Reverse2
- *   Reverse2 --Bump3|4 on--> ForwardBump2(100ms, num_tapes_crossed=0)
- *       ForwardBump2 --timeout--> SearchStrafeRight
- *           SearchStrafeRight: count tape4 on->off cycles;
- *               Tape4 on AND num_tapes_crossed==1 --> Reverse3
+ *   Reverse2 --Tape3 off--> Tape3NudgeRight(500ms) --> Tape3SearchLeft
+ *       Tape3SearchLeft --Tape3 on--> Reverse2
+ *   Reverse2 --Bump3|4 on--> ForwardBump2(100ms)
+ *       ForwardBump2 --timeout--> CrossStrafeRight(1500ms)
+ *       CrossStrafeRight --timeout--> SearchStrafeRight
+ *       SearchStrafeRight --Tape4 on--> Reverse3
  *   Reverse2 --Tape2 and Tape3 on--> Forward2(200ms) --> StrafeRight5in --> ReachedISZ
  *
- *   Reverse3 --Tape4 off--> Reverse3Wait(200ms)
- *       Reverse3Wait --Tape5 on--> StrafeLeft3 --Tape4 on--> Reverse3
- *       Reverse3Wait --timeout--> StrafeRight2 --Tape4 on--> Reverse3
- *   Reverse3 --Bump3|4 on--> ForwardBump3(100ms, num_tapes_crossed=0)
- *       ForwardBump3 --timeout--> SearchStrafeLeft
- *           SearchStrafeLeft: count tape3 on->off cycles;
- *               Tape3 on AND num_tapes_crossed==1 --> Reverse2
+ *   Reverse3 --Tape4 off--> Tape4NudgeLeft(500ms) --> Tape4SearchRight
+ *       Tape4SearchRight --Tape4 on--> Reverse3
+ *   Reverse3 --Bump3|4 on--> ForwardBump3(100ms)
+ *       ForwardBump3 --timeout--> CrossStrafeLeft(1500ms)
+ *       CrossStrafeLeft --timeout--> SearchStrafeLeft
+ *       SearchStrafeLeft --Tape3 on--> Reverse2
  *   Reverse3 --Tape2 and Tape4 on--> Forward3(200ms) --> StrafeLeft5in --> ReachedISZ
  */
 typedef enum {
@@ -58,18 +57,18 @@ typedef enum {
     Reverse1State,
     StrafeLeft1State,
     Reverse2State,
-    Reverse2WaitState,
-    StrafeRight1State,
-    StrafeLeft2State,
+    Tape3NudgeRightState,
+    Tape3SearchLeftState,
     ForwardBump2State,
+    CrossStrafeRightState,
     SearchStrafeRightState,
     Forward2State,
     StrafeRight5State,
     Reverse3State,
-    Reverse3WaitState,
-    StrafeLeft3State,
-    StrafeRight2State,
+    Tape4NudgeLeftState,
+    Tape4SearchRightState,
     ForwardBump3State,
+    CrossStrafeLeftState,
     SearchStrafeLeftState,
     Forward3State,
     StrafeLeft5State,
@@ -81,18 +80,18 @@ static const char *StateNames[] = {
     "Reverse1State",
     "StrafeLeft1State",
     "Reverse2State",
-    "Reverse2WaitState",
-    "StrafeRight1State",
-    "StrafeLeft2State",
+    "Tape3NudgeRightState",
+    "Tape3SearchLeftState",
     "ForwardBump2State",
+    "CrossStrafeRightState",
     "SearchStrafeRightState",
     "Forward2State",
     "StrafeRight5State",
     "Reverse3State",
-    "Reverse3WaitState",
-    "StrafeLeft3State",
-    "StrafeRight2State",
+    "Tape4NudgeLeftState",
+    "Tape4SearchRightState",
     "ForwardBump3State",
+    "CrossStrafeLeftState",
     "SearchStrafeLeftState",
     "Forward3State",
     "StrafeLeft5State",
@@ -109,7 +108,6 @@ static float savedHeadingRefDeg = 0.0f;
 /* DEPRECATED: heading-only align no longer tracks per-axis position refs. */
 static float x_ref = 0.0f;
 static float y_ref = 0.0f;
-static uint8_t num_tapes_crossed = 0u;
 
 static void SetMovementAxis(MovementAxis_t axis);
 static uint8_t IsAlignableState(NavigateState_t state);
@@ -133,7 +131,6 @@ uint8_t InitNavigateToISZSubHSM(BoundaryChoice_t startingBoundary)
     x_ref = 0.0f;
     y_ref = 0.0f;
     savedHeadingRefDeg = 0.0f;
-    num_tapes_crossed = 0u;
     CurrentState = InitPSubState;
 
     returnEvent = RunNavigateToISZSubHSM(INIT_EVENT);
@@ -163,14 +160,10 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     switch (CurrentState) {
     case InitPSubState:
         if (ThisEvent.EventType == ES_INIT) {
-            /* Zero the gyro immediately, then latch that zero as the reference
-             * heading every gyro align returns to. */
             RobotIMU_EnsureNDOF();
-            RobotIMU_ZeroPositionVelocity();
-            RobotIMU_ZeroHeading();
-            RobotIMU_LatchReferenceHeading();
+            RobotIMU_Update();
             savedHeadingRefDeg = RobotIMU_GetReferenceHeadingDeg();
-            NAV_TRACE("[NAV] entry: gyro zeroed, savedHeadingRef latched\r\n");
+            NAV_TRACE("[NAV] entry: preserving savedHeadingRef\r\n");
             SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
             nextState = Reverse1State;
             makeTransition = TRUE;
@@ -227,7 +220,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             } else if (TapeFalling(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
-                nextState = Reverse2WaitState;
+                nextState = Tape3NudgeRightState;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
@@ -245,39 +238,15 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         }
         break;
 
-    case Reverse2WaitState:
-        switch (ThisEvent.EventType) {
-        case ES_ENTRY:
-            RobotMotion_Reverse(MOTOR_SPEED_IPS);
-            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_TAPE5_WAIT_MS);
-            break;
-        case ES_EXIT:
-            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
-            break;
-        case TapeChangedEvent:
-            if (TapeRising(ThisEvent, TAPE_SENSOR_5_MASK) == TRUE) {
-                nextState = StrafeRight1State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
-            break;
-        case ES_TIMEOUT:
-            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
-                nextState = StrafeLeft2State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
-            break;
-        default:
-            break;
-        }
-        break;
-
-    case StrafeRight1State:
+    case Tape3NudgeRightState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
             RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_TAPE_RECOVERY_NUDGE_MS);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
             break;
         case TapeChangedEvent:
             if (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
@@ -286,12 +255,19 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = Tape3SearchLeftState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
         default:
             break;
         }
         break;
 
-    case StrafeLeft2State:
+    case Tape3SearchLeftState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
@@ -313,9 +289,30 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-            num_tapes_crossed = 0u;
             RobotMotion_Forward(MOTOR_SPEED_IPS);
             ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_FORWARD_AFTER_BUMP_MS);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = CrossStrafeRightState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case CrossStrafeRightState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_BUMP_CROSS_STRAFE_MS);
             break;
         case ES_EXIT:
             ES_Timer_StopTimer(NAV_SETTLE_TIMER);
@@ -340,13 +337,8 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             break;
         case TapeChangedEvent:
             if (TapeRising(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
-                if (num_tapes_crossed >= 1u) {
-                    nextState = Reverse3State;
-                    makeTransition = TRUE;
-                }
-                ThisEvent.EventType = ES_NO_EVENT;
-            } else if (TapeFalling(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
-                num_tapes_crossed++;
+                nextState = Reverse3State;
+                makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
@@ -408,7 +400,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             } else if (TapeFalling(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
-                nextState = Reverse3WaitState;
+                nextState = Tape4NudgeLeftState;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
@@ -426,39 +418,15 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         }
         break;
 
-    case Reverse3WaitState:
-        switch (ThisEvent.EventType) {
-        case ES_ENTRY:
-            RobotMotion_Reverse(MOTOR_SPEED_IPS);
-            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_TAPE5_WAIT_MS);
-            break;
-        case ES_EXIT:
-            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
-            break;
-        case TapeChangedEvent:
-            if (TapeRising(ThisEvent, TAPE_SENSOR_5_MASK) == TRUE) {
-                nextState = StrafeLeft3State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
-            break;
-        case ES_TIMEOUT:
-            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
-                nextState = StrafeRight2State;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            }
-            break;
-        default:
-            break;
-        }
-        break;
-
-    case StrafeLeft3State:
+    case Tape4NudgeLeftState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
             RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_TAPE_RECOVERY_NUDGE_MS);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
             break;
         case TapeChangedEvent:
             if (TapeRising(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
@@ -467,12 +435,19 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = Tape4SearchRightState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
         default:
             break;
         }
         break;
 
-    case StrafeRight2State:
+    case Tape4SearchRightState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
@@ -494,9 +469,30 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
-            num_tapes_crossed = 0u;
             RobotMotion_Forward(MOTOR_SPEED_IPS);
             ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_FORWARD_AFTER_BUMP_MS);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(NAV_SETTLE_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
+                nextState = CrossStrafeLeftState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case CrossStrafeLeftState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
+            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
+            ES_Timer_InitTimer(NAV_SETTLE_TIMER, NAV_BUMP_CROSS_STRAFE_MS);
             break;
         case ES_EXIT:
             ES_Timer_StopTimer(NAV_SETTLE_TIMER);
@@ -521,13 +517,8 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             break;
         case TapeChangedEvent:
             if (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
-                if (num_tapes_crossed >= 1u) {
-                    nextState = Reverse2State;
-                    makeTransition = TRUE;
-                }
-                ThisEvent.EventType = ES_NO_EVENT;
-            } else if (TapeFalling(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
-                num_tapes_crossed++;
+                nextState = Reverse2State;
+                makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
@@ -656,7 +647,7 @@ BoundaryChoice_t NavigateToISZ_GetBoundaryChoice(void)
 
 uint8_t NavigateToISZ_GetNumTapesCrossed(void)
 {
-    return num_tapes_crossed;
+    return 0u;
 }
 
 float NavigateToISZ_GetSavedHeadingRefDeg(void)

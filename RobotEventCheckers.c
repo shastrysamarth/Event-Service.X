@@ -214,6 +214,7 @@ uint8_t CheckRobotPeriodic(void)
     {
         lastImuUpdateMs = nowMs;
         RobotIMU_Update();
+        RobotIMU_UpdateGyroHeading();
     }
     RobotIMU_DebugStreamTick();
     BeaconStreamTick();
@@ -268,13 +269,11 @@ uint8_t CheckBeaconEvents(void)
     if (current > peakBeaconADC)
     {
         peakBeaconADC = current;
-        printf("Peak %d\n", peakBeaconADC);
     }
 
     if (current < minBeaconADC)
     {
         minBeaconADC = current;
-        printf("Min %d\n", minBeaconADC);
     }
 
     if ((beaconHadIncrease == FALSE) && 
@@ -564,7 +563,7 @@ static void ResetBeaconTracking(void)
 
 static uint8_t IsRobotMisaligned(void)
 {
-    float headingError = RobotIMU_GetHeadingErrorToRefDeg();
+    float headingError = RobotIMU_GetGyroHeadingErrorToRefDeg();
 
     /* Heading-only misalignment (DEPRECATED: position vs ref was IMU-based). */
     return (AbsFloat(headingError) > HEADING_THRESHOLD_DEG) ? TRUE : FALSE;
