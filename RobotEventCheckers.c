@@ -268,15 +268,17 @@ uint8_t CheckBeaconEvents(void)
     if (current > peakBeaconADC)
     {
         peakBeaconADC = current;
+        printf("Peak %d\n", peakBeaconADC);
     }
 
     if (current < minBeaconADC)
     {
         minBeaconADC = current;
+        printf("Min %d\n", minBeaconADC);
     }
 
     if ((beaconHadIncrease == FALSE) && 
-        (current >= (minBeaconADC + BEACON_ADC_DELTA)))
+        (current >= (minBeaconADC + BEACON_INCREASE_ADC_DELTA)))
     {
         lastBeaconADC = current;
         beaconHadIncrease = TRUE;
@@ -285,7 +287,7 @@ uint8_t CheckBeaconEvents(void)
     }
 
     if ((beaconHadIncrease == TRUE) &&
-        ((current + BEACON_ADC_DELTA) <= peakBeaconADC))
+        ((current + BEACON_DECREASE_ADC_DELTA) <= peakBeaconADC))
     {
         uint16_t peak = peakBeaconADC;
 

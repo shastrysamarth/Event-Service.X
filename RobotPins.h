@@ -235,7 +235,8 @@
  * #define SOLENOID_ON_ADC_THRESHOLD 700u
  * #define SOLENOID_ON_IS_HIGH 1
  */
-#define BEACON_ADC_DELTA 10u
+#define BEACON_INCREASE_ADC_DELTA 15u
+#define BEACON_DECREASE_ADC_DELTA 8u
 
 /*
  * L298N H-bridge 1 controls front motors:
