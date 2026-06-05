@@ -31,7 +31,7 @@
 /* FindFrontTape approach timings (reuse FIND_FRONT_IMU_TIMER, states are serial). */
 #define FRONT_TAPE_CONFIRM_MS 20u
 #define FRONT_TAPE_BACKUP_MS 500u
-#define FRONT_TAPE_RECOVER_TURN_MS 10u
+#define FRONT_TAPE_RECOVER_TURN_MS 20u
 
 #define FIND_FRONT_IMU_TIMER 0
 #define NAV_SETTLE_TIMER 1
