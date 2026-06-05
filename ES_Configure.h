@@ -65,7 +65,7 @@ extern const char * const EventNames[];
 #define TIMER0_RESP_FUNC PostRobotHSM
 #define TIMER1_RESP_FUNC PostRobotHSM
 #define TIMER2_RESP_FUNC PostRobotHSM
-#define TIMER3_RESP_FUNC TIMER_UNUSED
+#define TIMER3_RESP_FUNC PostRobotHSM
 #define TIMER4_RESP_FUNC TIMER_UNUSED
 #define TIMER5_RESP_FUNC TIMER_UNUSED
 #define TIMER6_RESP_FUNC TIMER_UNUSED

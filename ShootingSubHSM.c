@@ -5,6 +5,7 @@
 #include "ES_Timers.h"
 #include "RobotDebug.h"
 #include "RobotHSM.h"
+#include "RobotIMU.h"
 #include "RobotLauncher.h"
 #include "RobotMotion.h"
 #include "RobotPins.h"
@@ -49,10 +50,14 @@ static const char *StateNames[] = {
 
 typedef enum {
     FineTuneInitialBrakePhase,
-    FineTuneForwardPulsePhase,
-    FineTuneForwardBrakePhase,
-    FineTuneBackPulsePhase,
-    FineTuneBackBrakePhase,
+    FineTuneTurnRightPhase,
+    FineTuneTurnRightBrakePhase,
+    FineTuneSweepLeftPhase,
+    FineTuneSweepLeftBrakePhase,
+    FineTuneReturnPhase,
+    FineTuneReturnBrakePhase,
+    FineTuneFinalBackoffPhase,
+    FineTuneFinalBackoffBrakePhase,
 } BeaconFineTunePhase_t;
 
 static ShootingState_t CurrentState = InitPShootState;
@@ -67,10 +72,12 @@ static uint16_t searchTimedRemainingMs = SHOOT_BEACON_SEARCH_STRAFE_MS;
 static uint32_t searchTimedStartMs = 0u;
 static uint32_t shootCycleStartMs = 0u;
 static int16_t savedLauncherStep = LAUNCHER_STEPPER_HOME_STEP;
-static uint8_t fineTuneTurnLeft = TRUE;
 static BeaconFineTunePhase_t fineTunePhase = FineTuneInitialBrakePhase;
+static uint32_t fineTunePhaseStartMs = 0u;
+static uint16_t fineTuneSampleCount = 0u;
 static uint16_t fineTuneBestADC = 0u;
-static uint8_t fineTunePulseCount = 0u;
+static float fineTuneBestHeadingDeg = 0.0f;
+static uint8_t fineTuneLastTurnLeft = FALSE;
 
 static uint8_t LiveTapeMask(void);
 static uint8_t TapeEventCurrentMask(ES_Event event);
@@ -92,13 +99,27 @@ static void ResumeAfterTape5Escape(void);
 static void PauseForGyroAlign(void);
 static void StartGyroAlign(void);
 static void StartBeaconFineTuneTurn(void);
+static void StartBeaconFineTunePhase(BeaconFineTunePhase_t phase);
+static void ContinueBeaconFineTuneTurnRight(void);
+static void ContinueBeaconFineTuneSweepLeft(void);
+static void ContinueBeaconFineTuneReturn(ShootingState_t *nextState,
+        uint8_t *makeTransition, ES_Event *event);
+static void BeginBeaconFineTuneFinalBackoff(ES_Event *event);
+static void ContinueBeaconFineTuneFinalBackoff(void);
 static void IssueBeaconFineTuneTurn(uint8_t turnLeft);
-static uint8_t BeaconFineTuneADCDecreased(uint16_t currentADC);
+static void DriveBeaconFineTuneToward(float targetHeadingDeg);
+static void RecordBeaconFineTuneSample(const char *label);
+static float FineTuneHeadingDeg(void);
+static float FineTuneHeadingErrorDeg(float targetHeadingDeg);
+static float NormalizeFineTuneHeading(float headingDeg);
+static float AbsFloat(float value);
+static uint8_t FineTunePhaseExpired(void);
 static void FinishBeaconFineTuneTurn(ShootingState_t *nextState,
         uint8_t *makeTransition, ES_Event *event);
 static void StepLauncherTowardTarget(int16_t targetStep,
         ShootingState_t arrivedState, ShootingState_t *nextState,
         uint8_t *makeTransition, ES_Event *event);
+static void ArmShootTimer(uint32_t durationMs);
 static uint32_t ShootCycleRemainingMs(void);
 static uint8_t ShootCycleExpired(void);
 static void PostDone(void);
@@ -118,10 +139,12 @@ uint8_t InitShootingSubHSM(BoundaryChoice_t startingBoundary)
     searchTimedStartMs = 0u;
     shootCycleStartMs = 0u;
     savedLauncherStep = LAUNCHER_STEPPER_HOME_STEP;
-    fineTuneTurnLeft = TRUE;
     fineTunePhase = FineTuneInitialBrakePhase;
+    fineTunePhaseStartMs = 0u;
+    fineTuneSampleCount = 0u;
     fineTuneBestADC = 0u;
-    fineTunePulseCount = 0u;
+    fineTuneBestHeadingDeg = 0.0f;
+    fineTuneLastTurnLeft = FALSE;
 
     returnEvent = RunShootingSubHSM(INIT_EVENT);
     return (returnEvent.EventType == ES_NO_EVENT) ? TRUE : FALSE;
@@ -188,12 +211,8 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
             }
             DriveBeaconSearchStrafe();
             searchTimedStartMs = ES_Timer_GetTime();
-            if (ES_Timer_StartTimer(SHOOT_TIMER) == -1) {
-                printf("[SearchTimedStrafeState] INIT %dms\n", searchTimedRemainingMs);
-                ES_Timer_InitTimer(SHOOT_TIMER, searchTimedRemainingMs);
-            } else {
-                printf("[SearchTimedStrafeState] START %dms\n", searchTimedRemainingMs);
-            }
+            ArmShootTimer(searchTimedRemainingMs);
+            printf("[SearchTimedStrafeState] START %dms\n", searchTimedRemainingMs);
             break;
         case ES_EXIT:
             printf("[SearchTimedStrafeState] STOP %dms\n", searchTimedRemainingMs);
@@ -210,7 +229,6 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
         case ES_TIMEOUT:
             if (ThisEvent.EventParam == SHOOT_TIMER) {
                 printf("[SearchTimedStrafeState] RESET\n");
-                ES_Timer_SetTimer(SHOOT_TIMER, searchTimedRemainingMs);
                 searchTimedRemainingMs = SHOOT_BEACON_SEARCH_STRAFE_MS;
                 searchTargetEdgeArmed =
                         ((LiveTapeMask() & searchTargetTapeMask) == 0u) ?
@@ -308,56 +326,52 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
             break;
         case ES_TIMEOUT:
             if (ThisEvent.EventParam == SHOOT_TIMER) {
-                uint16_t currentADC;
-
                 switch (fineTunePhase) {
                 case FineTuneInitialBrakePhase:
-                    IssueBeaconFineTuneTurn(fineTuneTurnLeft);
-                    fineTunePhase = FineTuneForwardPulsePhase;
-                    ES_Timer_InitTimer(SHOOT_TIMER,
-                            SHOOT_BEACON_FINE_TUNE_TURN_PULSE_MS);
+                    StartBeaconFineTunePhase(FineTuneTurnRightPhase);
+                    ContinueBeaconFineTuneTurnRight();
                     break;
 
-                case FineTuneForwardPulsePhase:
-                    RobotMotion_Stop();
-                    fineTunePhase = FineTuneForwardBrakePhase;
-                    ES_Timer_InitTimer(SHOOT_TIMER,
-                            SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+                case FineTuneTurnRightPhase:
+                    ContinueBeaconFineTuneTurnRight();
                     break;
 
-                case FineTuneForwardBrakePhase:
-                    currentADC = RobotSensors_GetBeaconADC();
-                    if (currentADC > fineTuneBestADC) {
-                        fineTuneBestADC = currentADC;
-                    }
-                    if ((BeaconFineTuneADCDecreased(currentADC) == TRUE) ||
-                            (fineTunePulseCount >=
-                            SHOOT_BEACON_FINE_TUNE_MAX_PULSES)) {
-                        IssueBeaconFineTuneTurn(fineTuneTurnLeft ? FALSE : TRUE);
-                        fineTunePhase = FineTuneBackPulsePhase;
-                        ES_Timer_InitTimer(SHOOT_TIMER,
-                                SHOOT_BEACON_FINE_TUNE_TURN_PULSE_MS);
-                    } else {
-                        IssueBeaconFineTuneTurn(fineTuneTurnLeft);
-                        fineTunePhase = FineTuneForwardPulsePhase;
-                        ES_Timer_InitTimer(SHOOT_TIMER,
-                                SHOOT_BEACON_FINE_TUNE_TURN_PULSE_MS);
-                    }
+                case FineTuneTurnRightBrakePhase:
+                    RecordBeaconFineTuneSample("sweep-start");
+                    StartBeaconFineTunePhase(FineTuneSweepLeftPhase);
+                    ContinueBeaconFineTuneSweepLeft();
                     break;
 
-                case FineTuneBackPulsePhase:
-                    RobotMotion_Stop();
-                    fineTunePhase = FineTuneBackBrakePhase;
-                    ES_Timer_InitTimer(SHOOT_TIMER,
-                            SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+                case FineTuneSweepLeftPhase:
+                    ContinueBeaconFineTuneSweepLeft();
                     break;
 
-                case FineTuneBackBrakePhase:
+                case FineTuneSweepLeftBrakePhase:
+                    StartBeaconFineTunePhase(FineTuneReturnPhase);
+                    ContinueBeaconFineTuneReturn(&nextState,
+                            &makeTransition, &ThisEvent);
+                    break;
+
+                case FineTuneReturnPhase:
+                    ContinueBeaconFineTuneReturn(&nextState, &makeTransition,
+                            &ThisEvent);
+                    break;
+
+                case FineTuneReturnBrakePhase:
+                    BeginBeaconFineTuneFinalBackoff(&ThisEvent);
+                    break;
+
+                case FineTuneFinalBackoffPhase:
+                    ContinueBeaconFineTuneFinalBackoff();
+                    break;
+
+                case FineTuneFinalBackoffBrakePhase:
                     FinishBeaconFineTuneTurn(&nextState, &makeTransition,
                             &ThisEvent);
                     break;
 
                 default:
+                    RobotMotion_Stop();
                     FinishBeaconFineTuneTurn(&nextState, &makeTransition,
                             &ThisEvent);
                     break;
@@ -381,7 +395,7 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
             RobotLauncher_StopShooter();
             RobotStepper_Disable();
             shootCycleStartMs = ES_Timer_GetTime();
-            ES_Timer_InitTimer(SHOOT_TIMER, SHOOT_STEPPER_FALL_MS);
+            ArmShootTimer(SHOOT_STEPPER_FALL_MS);
             break;
         case ES_EXIT:
             ES_Timer_StopTimer(SHOOT_TIMER);
@@ -440,8 +454,8 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
             }
             RobotStepper_Enable();
             RobotLauncher_StartShooter();
-            ES_Timer_InitTimer(SHOOT_TIMER,
-                    (remainingMs < SHOOTER_RUN_MS) ? remainingMs : SHOOTER_RUN_MS);
+            ArmShootTimer((remainingMs < SHOOTER_RUN_MS) ?
+                    remainingMs : SHOOTER_RUN_MS);
             break;
         }
         case ES_EXIT:
@@ -499,8 +513,7 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
                 break;
             }
             RobotStepper_Enable();
-            ES_Timer_InitTimer(SHOOT_TIMER,
-                    (remainingMs < SHOOT_RELOAD_HOLD_MS) ?
+            ArmShootTimer((remainingMs < SHOOT_RELOAD_HOLD_MS) ?
                     remainingMs : SHOOT_RELOAD_HOLD_MS);
             break;
         }
@@ -531,8 +544,7 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
                 break;
             }
             RobotStepper_Disable();
-            ES_Timer_InitTimer(SHOOT_TIMER,
-                    (remainingMs < SHOOT_STEPPER_FALL_MS) ?
+            ArmShootTimer((remainingMs < SHOOT_STEPPER_FALL_MS) ?
                     remainingMs : SHOOT_STEPPER_FALL_MS);
             break;
         }
@@ -579,6 +591,13 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
 
 uint8_t ShootingSubHSM_IsBeaconSearchActive(void)
 {
+    if (CurrentState == AlignBeforeSearchState) {
+        return ((returnStateAfterAlign == SearchBeaconMaxState) ||
+                (returnStateAfterAlign == SearchTimedStrafeState) ||
+                (returnStateAfterAlign == SearchUntilTapeState)) ?
+                TRUE : FALSE;
+    }
+
     return ((CurrentState == SearchBeaconMaxState) ||
             (CurrentState == SearchTimedStrafeState) ||
             (CurrentState == SearchUntilTapeState)) ? TRUE : FALSE;
@@ -724,7 +743,6 @@ static uint8_t HandleBeaconSearchEvent(ES_Event event,
         return TRUE;
     case MaxSignalFoundEvent:
         maxBeaconADC = event.EventParam;
-        fineTuneTurnLeft = (strafeRight == TRUE) ? TRUE : FALSE;
         *nextState = BeaconFineTuneTurnState;
         *makeTransition = TRUE;
         return TRUE;
@@ -786,15 +804,124 @@ static void StartGyroAlign(void)
 static void StartBeaconFineTuneTurn(void)
 {
     RobotMotion_Stop();
+    RobotIMU_ResetGyroHeading();
     fineTunePhase = FineTuneInitialBrakePhase;
-    fineTuneBestADC = RobotSensors_GetBeaconADC();
-    fineTunePulseCount = 0u;
-    ES_Timer_InitTimer(SHOOT_TIMER, SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+    fineTunePhaseStartMs = ES_Timer_GetTime();
+    fineTuneSampleCount = 0u;
+    fineTuneBestADC = 0u;
+    fineTuneBestHeadingDeg = 0.0f;
+    fineTuneLastTurnLeft = FALSE;
+    maxBeaconADC = 0u;
+    printf("[SHOOT] gyro sweep start right=");
+    printf("%d", (int) SHOOT_BEACON_FINE_TUNE_RIGHT_DEG);
+    printf(" left=%d tol=%d\r\n",
+            (int) SHOOT_BEACON_FINE_TUNE_LEFT_DEG,
+            (int) SHOOT_BEACON_FINE_TUNE_HEADING_TOLERANCE_DEG);
+    ArmShootTimer(SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+}
+
+static void StartBeaconFineTunePhase(BeaconFineTunePhase_t phase)
+{
+    fineTunePhase = phase;
+    fineTunePhaseStartMs = ES_Timer_GetTime();
+}
+
+static void ContinueBeaconFineTuneTurnRight(void)
+{
+    float heading = FineTuneHeadingDeg();
+    uint8_t expired = FineTunePhaseExpired();
+
+    if ((heading <= SHOOT_BEACON_FINE_TUNE_RIGHT_DEG) ||
+            (expired == TRUE)) {
+        RobotMotion_Stop();
+        StartBeaconFineTunePhase(FineTuneTurnRightBrakePhase);
+        printf("[SHOOT] gyro sweep right done heading=%d%s\r\n",
+                (int) heading,
+                (expired == TRUE) ? " timeout" : "");
+        ArmShootTimer(SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+    } else {
+        IssueBeaconFineTuneTurn(FALSE);
+        ArmShootTimer(SHOOT_BEACON_FINE_TUNE_CONTROL_MS);
+    }
+}
+
+static void ContinueBeaconFineTuneSweepLeft(void)
+{
+    float heading = FineTuneHeadingDeg();
+    uint8_t expired = FineTunePhaseExpired();
+
+    RecordBeaconFineTuneSample("sweep");
+    if ((heading >= SHOOT_BEACON_FINE_TUNE_LEFT_DEG) ||
+            (expired == TRUE)) {
+        RobotMotion_Stop();
+        StartBeaconFineTunePhase(FineTuneSweepLeftBrakePhase);
+        printf("[SHOOT] gyro sweep left done heading=%d best=%d adc=%u%s\r\n",
+                (int) heading,
+                (int) fineTuneBestHeadingDeg,
+                (unsigned int) fineTuneBestADC,
+                (expired == TRUE) ? " timeout" : "");
+        ArmShootTimer(SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+    } else {
+        IssueBeaconFineTuneTurn(TRUE);
+        ArmShootTimer(SHOOT_BEACON_FINE_TUNE_CONTROL_MS);
+    }
+}
+
+static void ContinueBeaconFineTuneReturn(ShootingState_t *nextState,
+        uint8_t *makeTransition, ES_Event *event)
+{
+    float error = FineTuneHeadingErrorDeg(fineTuneBestHeadingDeg);
+    uint8_t expired = FineTunePhaseExpired();
+
+    if ((AbsFloat(error) <= SHOOT_BEACON_FINE_TUNE_HEADING_TOLERANCE_DEG) ||
+            (expired == TRUE)) {
+        RobotMotion_Stop();
+        StartBeaconFineTunePhase(FineTuneReturnBrakePhase);
+        printf("[SHOOT] gyro sweep return done heading=%d target=%d adc=%u%s\r\n",
+                (int) FineTuneHeadingDeg(),
+                (int) fineTuneBestHeadingDeg,
+                (unsigned int) fineTuneBestADC,
+                (expired == TRUE) ? " timeout" : "");
+        ArmShootTimer(SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+        event->EventType = ES_NO_EVENT;
+        return;
+    }
+
+    (void) nextState;
+    (void) makeTransition;
+    DriveBeaconFineTuneToward(fineTuneBestHeadingDeg);
+    ArmShootTimer(SHOOT_BEACON_FINE_TUNE_CONTROL_MS);
+    event->EventType = ES_NO_EVENT;
+}
+
+static void BeginBeaconFineTuneFinalBackoff(ES_Event *event)
+{
+    float heading = FineTuneHeadingDeg();
+
+    StartBeaconFineTunePhase(FineTuneFinalBackoffPhase);
+    printf("[SHOOT] gyro sweep final backoff from=%d opposite=%s\r\n",
+            (int) heading,
+            (fineTuneLastTurnLeft == TRUE) ? "right" : "left");
+    /* One open-loop nudge opposite the last return pulse, not a closed-loop
+     * servo (20 ms pulses overshoot the 2 deg tolerance and hunt). */
+    IssueBeaconFineTuneTurn(fineTuneLastTurnLeft == TRUE ? FALSE : TRUE);
+    ArmShootTimer(SHOOT_BEACON_FINE_TUNE_FINAL_BACKOFF_MS);
+    event->EventType = ES_NO_EVENT;
+}
+
+static void ContinueBeaconFineTuneFinalBackoff(void)
+{
+    RobotMotion_Stop();
+    StartBeaconFineTunePhase(FineTuneFinalBackoffBrakePhase);
+    printf("[SHOOT] gyro sweep final backoff done heading=%d%s\r\n",
+            (int) FineTuneHeadingDeg(),
+            (FineTunePhaseExpired() == TRUE) ? " timeout" : "");
+    ArmShootTimer(SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
 }
 
 static void IssueBeaconFineTuneTurn(uint8_t turnLeft)
 {
-    fineTunePulseCount++;
+    fineTuneLastTurnLeft = turnLeft ? TRUE : FALSE;
     if (turnLeft == TRUE) {
         RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, ALIGN_SPEED_IPS);
     } else {
@@ -802,17 +929,84 @@ static void IssueBeaconFineTuneTurn(uint8_t turnLeft)
     }
 }
 
-static uint8_t BeaconFineTuneADCDecreased(uint16_t currentADC)
+static void DriveBeaconFineTuneToward(float targetHeadingDeg)
 {
-    return (((uint32_t) currentADC + SHOOT_BEACON_FINE_TUNE_MARGIN_ADC) <
-            (uint32_t) fineTuneBestADC) ? TRUE : FALSE;
+    float error = FineTuneHeadingErrorDeg(targetHeadingDeg);
+    float turnBandDeg = SHOOT_BEACON_FINE_TUNE_HEADING_TOLERANCE_DEG;
+
+    if (error > turnBandDeg) {
+        IssueBeaconFineTuneTurn(TRUE);
+    } else if (error < -turnBandDeg) {
+        IssueBeaconFineTuneTurn(FALSE);
+    } else {
+        RobotMotion_Stop();
+    }
+}
+
+static void RecordBeaconFineTuneSample(const char *label)
+{
+    uint16_t currentADC = RobotSensors_GetBeaconADC();
+    float heading = FineTuneHeadingDeg();
+
+    fineTuneSampleCount++;
+    if ((fineTuneSampleCount == 1u) || (currentADC > fineTuneBestADC)) {
+        fineTuneBestADC = currentADC;
+        fineTuneBestHeadingDeg = heading;
+        maxBeaconADC = currentADC;
+        printf("[SHOOT] gyro sweep best %s sample=%u heading=%d adc=%u\r\n",
+                label,
+                (unsigned int) fineTuneSampleCount,
+                (int) heading,
+                (unsigned int) currentADC);
+    }
+}
+
+static float FineTuneHeadingDeg(void)
+{
+    RobotIMU_UpdateGyroHeading();
+    return RobotIMU_GetGyroHeadingDeg();
+}
+
+static float FineTuneHeadingErrorDeg(float targetHeadingDeg)
+{
+    return NormalizeFineTuneHeading(targetHeadingDeg - FineTuneHeadingDeg());
+}
+
+static float NormalizeFineTuneHeading(float headingDeg)
+{
+    while (headingDeg >= 180.0f) {
+        headingDeg -= 360.0f;
+    }
+    while (headingDeg < -180.0f) {
+        headingDeg += 360.0f;
+    }
+    return headingDeg;
+}
+
+static float AbsFloat(float value)
+{
+    return (value < 0.0f) ? -value : value;
+}
+
+static uint8_t FineTunePhaseExpired(void)
+{
+    return ((ES_Timer_GetTime() - fineTunePhaseStartMs) >=
+            SHOOT_BEACON_FINE_TUNE_PHASE_MAX_MS) ? TRUE : FALSE;
 }
 
 static void FinishBeaconFineTuneTurn(ShootingState_t *nextState,
         uint8_t *makeTransition, ES_Event *event)
 {
     RobotMotion_Stop();
-    maxBeaconADC = fineTuneBestADC;
+    if (fineTuneBestADC != 0u) {
+        maxBeaconADC = fineTuneBestADC;
+    } else {
+        maxBeaconADC = RobotSensors_GetBeaconADC();
+    }
+    printf("[SHOOT] gyro sweep locked heading=%d adc=%u samples=%u\r\n",
+            (int) fineTuneBestHeadingDeg,
+            (unsigned int) maxBeaconADC,
+            (unsigned int) fineTuneSampleCount);
     *nextState = InitialStepperFallState;
     *makeTransition = TRUE;
     event->EventType = ES_NO_EVENT;
@@ -829,9 +1023,18 @@ static void StepLauncherTowardTarget(int16_t targetStep,
         *nextState = arrivedState;
         *makeTransition = TRUE;
     } else {
-        ES_Timer_InitTimer(SHOOT_TIMER, SHOOT_STEPPER_STEP_INTERVAL_MS);
+        ArmShootTimer(SHOOT_STEPPER_STEP_INTERVAL_MS);
     }
     event->EventType = ES_NO_EVENT;
+}
+
+static void ArmShootTimer(uint32_t durationMs)
+{
+    if (durationMs == 0u) {
+        durationMs = 1u;
+    }
+    ES_Timer_SetTimer(SHOOT_TIMER, durationMs);
+    ES_Timer_StartTimer(SHOOT_TIMER);
 }
 
 static uint32_t ShootCycleRemainingMs(void)

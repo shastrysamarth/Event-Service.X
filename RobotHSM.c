@@ -6,10 +6,14 @@
 #include "NavigateToISZSubHSM.h"
 #include "RobotHardware.h"
 #include "RobotMotion.h"
+#include "RobotPins.h"
+#include "RobotStepper.h"
 #include "ShootingSubHSM.h"
+#include "ES_Timers.h"
 
 typedef enum {
     InitPState,
+    StartupIgnoreState,
     FindFrontTapeState,
     NavigateToISZState,
     ShootState,
@@ -18,6 +22,7 @@ typedef enum {
 
 static const char *StateNames[] = {
     "InitPState",
+    "StartupIgnoreState",
     "FindFrontTapeState",
     "NavigateToISZState",
     "ShootState",
@@ -51,9 +56,33 @@ ES_Event RunRobotHSM(ES_Event ThisEvent)
     switch (CurrentState) {
     case InitPState:
         if (ThisEvent.EventType == ES_INIT) {
-            nextState = FindFrontTapeState;
+            nextState = StartupIgnoreState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
+        }
+        break;
+
+    case StartupIgnoreState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            RobotHardware_StopAllOutputs();
+            RobotStepper_Enable();
+            ES_Timer_InitTimer(STARTUP_IGNORE_TIMER, STARTUP_IGNORE_MS);
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(STARTUP_IGNORE_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == STARTUP_IGNORE_TIMER) {
+                nextState = FindFrontTapeState;
+                makeTransition = TRUE;
+            }
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        default:
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
         }
         break;
 

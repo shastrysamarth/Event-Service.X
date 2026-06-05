@@ -137,7 +137,7 @@ void RobotMotion_Forward(float speedIPS)
     lastMotionPivot = "none";
     LogMotionChange();
     SetChassisVelocity(0.0f, speedIPS, 0.0f,
-            1.08f, 1.00f, 1.08f, 1.00f);
+            1.00f, 1.00f, 1.00f, 1.00f);
 }
 
 void RobotMotion_Reverse(float speedIPS)
@@ -146,7 +146,7 @@ void RobotMotion_Reverse(float speedIPS)
     lastMotionPivot = "none";
     LogMotionChange();
     SetChassisVelocity(0.0f, -speedIPS, 0.0f,
-            1.08f, 1.00f, 1.08f, 1.00f);
+            1.05f, 1.00f, 1.05f, 1.00f);
 }
 
 void RobotMotion_StrafeRight(float speedIPS)
@@ -155,7 +155,7 @@ void RobotMotion_StrafeRight(float speedIPS)
     lastMotionPivot = "none";
     LogMotionChange();
     SetChassisVelocity(-speedIPS, 0.0f, 0.0f,
-            1.00f, 1.00f, 1.00f, 1.07f);
+            0.98f, 1.03f, 1.03f, 0.98f);
 }
 
 void RobotMotion_StrafeLeft(float speedIPS)
@@ -164,7 +164,7 @@ void RobotMotion_StrafeLeft(float speedIPS)
     lastMotionPivot = "none";
     LogMotionChange();
     SetChassisVelocity(speedIPS, 0.0f, 0.0f,
-            1.15f, 1.00f, 1.00f, 1.00f);
+            1.09f, 1.01f, 0.99f, 1.00f);
 }
 
 void RobotMotion_TestWheelSpeeds(float frontLeftIPS, float frontRightIPS,

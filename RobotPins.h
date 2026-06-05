@@ -23,11 +23,11 @@
 
 #define FIND_FRONT_IMU_SETTLE_MS 3000u
 #define TURN_IMU_SETTLE_MS 100u
-#define SHOOT_CYCLE_TOTAL_MS 60000u
+#define SHOOT_CYCLE_TOTAL_MS 1800000u
 #define SHOOTER_RUN_MS 2000u
 #define SHOOT_RELOAD_HOLD_MS 1000u
 #define SHOOT_STEPPER_FALL_MS 500u
-#define SHOOT_STEPPER_STEP_INTERVAL_MS 400u
+#define SHOOT_STEPPER_STEP_INTERVAL_MS 500u
 
 /* FindFrontTape approach timings (reuse FIND_FRONT_IMU_TIMER, states are serial). */
 #define FRONT_TAPE_CONFIRM_MS 20u
@@ -37,6 +37,8 @@
 #define FIND_FRONT_IMU_TIMER 0
 #define NAV_SETTLE_TIMER 1
 #define SHOOT_TIMER 2
+#define STARTUP_IGNORE_TIMER 3
+#define STARTUP_IGNORE_MS 5000u
 
 /* DEPRECATED with heading-only align: was used for IMU position error vs ref. */
 #define POSITION_THRESHOLD_IN 0.75f
@@ -56,9 +58,17 @@
 /* DEPRECATED name: use GYRO_ALIGN_TURN_PULSE_MIN_MS / _MAX_MS instead. */
 #define GYRO_ALIGN_TURN_PULSE_MS GYRO_ALIGN_TURN_PULSE_MIN_MS
 #define SHOOT_BEACON_FINE_TUNE_MARGIN_ADC 2u
-#define SHOOT_BEACON_FINE_TUNE_TURN_PULSE_MS GYRO_ALIGN_TURN_PULSE_MIN_MS
+/* Beacon aim sweep is gyro-angle driven: turn right 90 deg from the current
+ * heading, sweep left 180 deg, then return to the highest-ADC heading. */
+#define SHOOT_BEACON_FINE_TUNE_RIGHT_DEG (-90.0f)
+#define SHOOT_BEACON_FINE_TUNE_LEFT_DEG 90.0f
+#define SHOOT_BEACON_FINE_TUNE_FINAL_BACKOFF_DEG 5.0f
+/* Open-loop final backoff pulse (~5 deg at beacon fine-tune turn rate). */
+#define SHOOT_BEACON_FINE_TUNE_FINAL_BACKOFF_MS 80u
+#define SHOOT_BEACON_FINE_TUNE_HEADING_TOLERANCE_DEG 2.0f
+#define SHOOT_BEACON_FINE_TUNE_CONTROL_MS 20u
+#define SHOOT_BEACON_FINE_TUNE_PHASE_MAX_MS 7000u
 #define SHOOT_BEACON_FINE_TUNE_BRAKE_MS GYRO_ALIGN_BRAKE_MS
-#define SHOOT_BEACON_FINE_TUNE_MAX_PULSES 40u
 #define TAPE_ALIGN_SWEEP_TIMER_MS 300u
 /* Tape align heading-correction turn slice: motors stall below ~4 IPS, so the
  * heading is squared in short pulse/rest cycles instead of a continuous turn. */
@@ -141,9 +151,9 @@
  *   NAV_FORWARD_TO_ISZ_MS     : forward creep before handing off to Shoot/ISZ. */
 #define NAV_TAPE_RECOVERY_NUDGE_MS 500u
 #define NAV_FORWARD_AFTER_BUMP_MS 100u
-#define NAV_BUMP_CROSS_STRAFE_MS 1500u
+#define NAV_BUMP_CROSS_STRAFE_MS 1800u
 #define NAV_FORWARD_TO_ISZ_MS 800u
-#define SHOOT_BEACON_SEARCH_STRAFE_MS 1500u
+#define SHOOT_BEACON_SEARCH_STRAFE_MS 1800u
 
 /* Tape event params use bit = 1 when that tape sensor is on tape. */
 #define TAPE_SENSOR_1_MASK (1u << 0)
@@ -274,8 +284,8 @@
  * #define SOLENOID_ON_IS_HIGH 1
  */
 /* First-stage beacon acquisition while the robot is close to the beacon. */
-#define BEACON_INCREASE_ADC_DELTA 4u
-#define BEACON_DECREASE_ADC_DELTA 4u
+#define BEACON_INCREASE_ADC_DELTA 8u
+#define BEACON_DECREASE_ADC_DELTA 8u
 /* Shooting-stage beacon search from farther back in the field. */
 #define SHOOTING_BEACON_INCREASE_ADC_DELTA 8u
 #define SHOOTING_BEACON_DECREASE_ADC_DELTA 8u

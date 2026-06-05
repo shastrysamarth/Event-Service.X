@@ -28,11 +28,11 @@ static const BeaconAimPoint_t BeaconAimLUT[] = {
     {580u, 1500u, 13},
     {512u, 1350u, 17},
 #else
-    {555u, 13},
-    {545u, 12},
-    {542u, 8},
-    {528u, 3},
-    {512u, 0},
+    // {555u, 13},
+    // {545u, 12},
+    // {542u, 8},
+    // {528u, 3},
+    {0u, 2},
 #endif
 };
 
@@ -100,6 +100,9 @@ void RobotLauncher_StartShooter(void)
 {
 #if ROBOT_PLUGPLAY_USE_SHOOTER_MOTOR
     PWM_SetDutyCycle(SHOOTER_MOTOR_PWM_PIN, SHOOTER_MOTOR_DUTY);
+    printf("[SHOOTER] start duty=%u\r\n", (unsigned int) SHOOTER_MOTOR_DUTY);
+#else
+    printf("[SHOOTER] start ignored, shooter motor disabled\r\n");
 #endif
 }
 
@@ -107,6 +110,9 @@ void RobotLauncher_StopShooter(void)
 {
 #if ROBOT_PLUGPLAY_USE_SHOOTER_MOTOR
     PWM_SetDutyCycle(SHOOTER_MOTOR_PWM_PIN, 0u);
+    printf("[SHOOTER] stop\r\n");
+#else
+    printf("[SHOOTER] stop ignored, shooter motor disabled\r\n");
 #endif
 }
 
