@@ -82,6 +82,9 @@ static void SetSearchDirection(uint8_t goRight);
 static void DriveBeaconSearchStrafe(void);
 static uint8_t Tape5TurnedOn(ES_Event event);
 static uint8_t SearchTargetTapeOn(ES_Event event);
+static uint8_t BeginTape5EscapeIfLive(ShootingState_t resumeState,
+        ShootingState_t *nextState, uint8_t *makeTransition,
+        ES_Event *event);
 static uint8_t HandleBeaconSearchEvent(ES_Event event,
         ShootingState_t *nextState, uint8_t *makeTransition);
 static void PauseForTape5Escape(ShootingState_t resumeState);
@@ -179,6 +182,10 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     case SearchTimedStrafeState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
+            if (BeginTape5EscapeIfLive(SearchTimedStrafeState, &nextState,
+                    &makeTransition, &ThisEvent) == TRUE) {
+                break;
+            }
             DriveBeaconSearchStrafe();
             searchTimedStartMs = ES_Timer_GetTime();
             if (ES_Timer_StartTimer(SHOOT_TIMER) == -1) {
@@ -225,6 +232,10 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     case SearchUntilTapeState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
+            if (BeginTape5EscapeIfLive(SearchUntilTapeState, &nextState,
+                    &makeTransition, &ThisEvent) == TRUE) {
+                break;
+            }
             DriveBeaconSearchStrafe();
             break;
         case TapeChangedEvent:
@@ -688,6 +699,21 @@ static uint8_t SearchTargetTapeOn(ES_Event event)
     return (((TapeEventChangedMask(event) & searchTargetTapeMask) != 0u) &&
             ((TapeEventCurrentMask(event) & searchTargetTapeMask) != 0u)) ?
             TRUE : FALSE;
+}
+
+static uint8_t BeginTape5EscapeIfLive(ShootingState_t resumeState,
+        ShootingState_t *nextState, uint8_t *makeTransition,
+        ES_Event *event)
+{
+    if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == FALSE) {
+        return FALSE;
+    }
+
+    searchResumeState = resumeState;
+    *nextState = Tape5ReverseEscapeState;
+    *makeTransition = TRUE;
+    event->EventType = ES_NO_EVENT;
+    return TRUE;
 }
 
 static uint8_t HandleBeaconSearchEvent(ES_Event event,

@@ -63,9 +63,9 @@
  *  off on entry and on at exit we synthesize a TapeChangedEvent rising edge and
  *  post it to the top so the returned-to nav state can switch strafe -> reverse.
  *
- *  GYRO mode defers exact change events it receives while turning and replays
- *  those same events on exit, so caller states do not miss edges that occurred
- *  while align owned the drive. */
+ *  GYRO mode defers exact sensor events it receives while turning and replays
+ *  those same events on exit, plus a live tape/bump reassertion, so caller
+ *  states do not miss edges that occurred while align owned the drive. */
 typedef enum {
     InitPAlignState,
     GyroHeadingAlignState,
@@ -99,7 +99,7 @@ static uint16_t alignTimerMs = ALIGN_TIMER_START_MS;
 /* Tape sensor mask sampled when align started, used to detect a corner-sensor
  * rising edge between entry and exit. */
 static uint8_t tapeEntryMask = 0u;
-#define GYRO_DEFERRED_EVENT_CAPACITY 4u
+#define GYRO_DEFERRED_EVENT_CAPACITY 8u
 static ES_Event gyroDeferredEvents[GYRO_DEFERRED_EVENT_CAPACITY];
 static uint8_t gyroDeferredEventCount = 0u;
 /* Corner sensor for the active axis/boundary (2 horizontal, 4 top, 3 bottom). */
@@ -245,6 +245,7 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
             break;
         case TapeChangedEvent:
         case BumpChangedEvent:
+            RecordGyroDeferredEvent(ThisEvent);
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         case PositionRealignedEvent:
