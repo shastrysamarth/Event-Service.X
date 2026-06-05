@@ -8,24 +8,39 @@
 #include "RobotStepper.h"
 #include "pwm.h"
 
+#include <stdio.h>
+
 typedef struct {
     uint16_t beaconADC;
+#if ROBOT_PLUGPLAY_USE_LAUNCHER_SERVO
     uint16_t servoPulseUS;
+#endif
     int16_t fullStepTarget;
 } BeaconAimPoint_t;
 
-/* Full-step launcher LUT. NEMA17 is 200 full steps/rev = 1.8 deg/step.
- * [FLAG][#1] Replace these placeholder step targets with measured shots. */
+/* Dummy Beacon ADC -> full-step launcher LUT, ordered high ADC to low ADC.
+ * [FLAG][#1] Replace these placeholder step targets with measured shots.
+ * Servo pulse values are retained only for optional servo fallback builds. */
 static const BeaconAimPoint_t BeaconAimLUT[] = {
-    {100u, 1850u, 15},
-    {300u, 1700u, 12},
-    {500u, 1550u, 9},
-    {700u, 1400u, 6},
-    {900u, 1250u, 3},
+#if ROBOT_PLUGPLAY_USE_LAUNCHER_SERVO
+    {900u, 1800u, 3},
+    {700u, 1650u, 8},
+    {580u, 1500u, 13},
+    {512u, 1350u, 17},
+#else
+    {555u, 13},
+    {545u, 12},
+    {542u, 8},
+    {528u, 3},
+    {512u, 0},
+#endif
 };
 
+#if ROBOT_PLUGPLAY_USE_LAUNCHER_SERVO
 static uint16_t PulseForBeacon(uint16_t beaconADC);
+#endif
 static int16_t StepForBeacon(uint16_t beaconADC);
+static uint8_t AimIndexForBeacon(uint16_t beaconADC);
 static int16_t ClampStepTarget(int16_t stepTarget);
 static uint8_t EnsurePWMReady(void);
 
@@ -71,6 +86,16 @@ int16_t RobotLauncher_GetTargetStepForBeaconADC(uint16_t beaconADC)
     return StepForBeacon(beaconADC);
 }
 
+void RobotLauncher_LogAimLUTSelection(uint16_t beaconADC)
+{
+    uint8_t selectedIndex = AimIndexForBeacon(beaconADC);
+
+    printf("[SHOOT] LUT[%u] adc=%u step=%d\r\n",
+            (unsigned int) selectedIndex,
+            (unsigned int) beaconADC,
+            (int) BeaconAimLUT[selectedIndex].fullStepTarget);
+}
+
 void RobotLauncher_StartShooter(void)
 {
 #if ROBOT_PLUGPLAY_USE_SHOOTER_MOTOR
@@ -100,6 +125,7 @@ static uint8_t EnsurePWMReady(void)
     return TRUE;
 }
 
+#if ROBOT_PLUGPLAY_USE_LAUNCHER_SERVO
 static uint16_t PulseForBeacon(uint16_t beaconADC)
 {
     uint8_t i;
@@ -123,31 +149,24 @@ static uint16_t PulseForBeacon(uint16_t beaconADC)
 
     return BeaconAimLUT[(sizeof (BeaconAimLUT) / sizeof (BeaconAimLUT[0])) - 1u].servoPulseUS;
 }
+#endif
 
 static int16_t StepForBeacon(uint16_t beaconADC)
 {
+    return ClampStepTarget(BeaconAimLUT[AimIndexForBeacon(beaconADC)].fullStepTarget);
+}
+
+static uint8_t AimIndexForBeacon(uint16_t beaconADC)
+{
     uint8_t i;
 
-    if (beaconADC <= BeaconAimLUT[0].beaconADC) {
-        return ClampStepTarget(BeaconAimLUT[0].fullStepTarget);
-    }
-
-    for (i = 1; i < (sizeof (BeaconAimLUT) / sizeof (BeaconAimLUT[0])); i++) {
-        if (beaconADC <= BeaconAimLUT[i].beaconADC) {
-            uint16_t adc0 = BeaconAimLUT[i - 1u].beaconADC;
-            uint16_t adc1 = BeaconAimLUT[i].beaconADC;
-            int32_t step0 = (int32_t) BeaconAimLUT[i - 1u].fullStepTarget;
-            int32_t step1 = (int32_t) BeaconAimLUT[i].fullStepTarget;
-            int32_t delta = step1 - step0;
-            int32_t scaled = ((int32_t) (beaconADC - adc0) * delta) /
-                    (int32_t) (adc1 - adc0);
-
-            return ClampStepTarget((int16_t) (step0 + scaled));
+    for (i = 0u; i < (sizeof (BeaconAimLUT) / sizeof (BeaconAimLUT[0])); i++) {
+        if (beaconADC >= BeaconAimLUT[i].beaconADC) {
+            return i;
         }
     }
 
-    return ClampStepTarget(BeaconAimLUT[(sizeof (BeaconAimLUT) /
-            sizeof (BeaconAimLUT[0])) - 1u].fullStepTarget);
+    return (uint8_t) ((sizeof (BeaconAimLUT) / sizeof (BeaconAimLUT[0])) - 1u);
 }
 
 static int16_t ClampStepTarget(int16_t stepTarget)

@@ -78,7 +78,7 @@ void RobotStepper_Step(uint16_t steps, uint8_t forward)
     RobotStepper_SetDirection(forward);
     for (i = 0u; i < steps; i++) {
         RobotStepper_PulseStep();
-        currentStep += forward ? 1 : -1;
+        currentStep += forward ? -1 : 1;
     }
 #else
     (void) steps;
@@ -93,12 +93,29 @@ void RobotStepper_MoveToStep(int16_t targetStep)
 
     RobotStepper_Enable();
     if (delta > 0) {
-        RobotStepper_Step((uint16_t) delta, TRUE);
+        RobotStepper_Step((uint16_t) delta, FALSE);
     } else if (delta < 0) {
-        RobotStepper_Step((uint16_t) -delta, FALSE);
+        RobotStepper_Step((uint16_t) -delta, TRUE);
     }
 #else
     (void) targetStep;
+#endif
+}
+
+uint8_t RobotStepper_StepTowardTarget(int16_t targetStep)
+{
+#if ROBOT_PLUGPLAY_USE_STEPPER
+    int16_t delta = targetStep - currentStep;
+
+    if (delta > 0) {
+        RobotStepper_Step(1u, FALSE);
+    } else if (delta < 0) {
+        RobotStepper_Step(1u, TRUE);
+    }
+    return (currentStep == targetStep) ? TRUE : FALSE;
+#else
+    (void) targetStep;
+    return TRUE;
 #endif
 }
 

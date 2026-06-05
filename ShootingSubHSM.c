@@ -20,6 +20,7 @@ typedef enum {
     SearchTimedStrafeState,
     SearchUntilTapeState,
     Tape5ReverseEscapeState,
+    BeaconFineTuneTurnState,
     InitialStepperFallState,
     SetLauncherAngleState,
     RunShooterState,
@@ -36,6 +37,7 @@ static const char *StateNames[] = {
     "SearchTimedStrafeState",
     "SearchUntilTapeState",
     "Tape5ReverseEscapeState",
+    "BeaconFineTuneTurnState",
     "InitialStepperFallState",
     "SetLauncherAngleState",
     "RunShooterState",
@@ -44,6 +46,14 @@ static const char *StateNames[] = {
     "ReloadFallState",
     "DoneShootState",
 };
+
+typedef enum {
+    FineTuneInitialBrakePhase,
+    FineTuneForwardPulsePhase,
+    FineTuneForwardBrakePhase,
+    FineTuneBackPulsePhase,
+    FineTuneBackBrakePhase,
+} BeaconFineTunePhase_t;
 
 static ShootingState_t CurrentState = InitPShootState;
 static uint16_t maxBeaconADC = 0u;
@@ -57,6 +67,10 @@ static uint16_t searchTimedRemainingMs = SHOOT_BEACON_SEARCH_STRAFE_MS;
 static uint32_t searchTimedStartMs = 0u;
 static uint32_t shootCycleStartMs = 0u;
 static int16_t savedLauncherStep = LAUNCHER_STEPPER_HOME_STEP;
+static uint8_t fineTuneTurnLeft = TRUE;
+static BeaconFineTunePhase_t fineTunePhase = FineTuneInitialBrakePhase;
+static uint16_t fineTuneBestADC = 0u;
+static uint8_t fineTunePulseCount = 0u;
 
 static uint8_t LiveTapeMask(void);
 static uint8_t TapeEventCurrentMask(ES_Event event);
@@ -74,6 +88,14 @@ static void PauseForTape5Escape(ShootingState_t resumeState);
 static void ResumeAfterTape5Escape(void);
 static void PauseForGyroAlign(void);
 static void StartGyroAlign(void);
+static void StartBeaconFineTuneTurn(void);
+static void IssueBeaconFineTuneTurn(uint8_t turnLeft);
+static uint8_t BeaconFineTuneADCDecreased(uint16_t currentADC);
+static void FinishBeaconFineTuneTurn(ShootingState_t *nextState,
+        uint8_t *makeTransition, ES_Event *event);
+static void StepLauncherTowardTarget(int16_t targetStep,
+        ShootingState_t arrivedState, ShootingState_t *nextState,
+        uint8_t *makeTransition, ES_Event *event);
 static uint32_t ShootCycleRemainingMs(void);
 static uint8_t ShootCycleExpired(void);
 static void PostDone(void);
@@ -93,7 +115,10 @@ uint8_t InitShootingSubHSM(BoundaryChoice_t startingBoundary)
     searchTimedStartMs = 0u;
     shootCycleStartMs = 0u;
     savedLauncherStep = LAUNCHER_STEPPER_HOME_STEP;
-    RobotStepper_Disable();
+    fineTuneTurnLeft = TRUE;
+    fineTunePhase = FineTuneInitialBrakePhase;
+    fineTuneBestADC = 0u;
+    fineTunePulseCount = 0u;
 
     returnEvent = RunShootingSubHSM(INIT_EVENT);
     return (returnEvent.EventType == ES_NO_EVENT) ? TRUE : FALSE;
@@ -110,7 +135,6 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     switch (CurrentState) {
     case InitPShootState:
         if (ThisEvent.EventType == ES_INIT) {
-            RobotStepper_Disable();
             SetSearchDirectionForBoundary(boundary_choice);
             returnStateAfterAlign = SearchBeaconMaxState;
             searchTargetEdgeArmed = TRUE;
@@ -136,7 +160,6 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     case SearchBeaconMaxState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotStepper_Disable();
             if (RobotSensors_IsTapeOn(TAPE_SENSOR_5) == TRUE) {
                 searchResumeState = SearchBeaconMaxState;
                 nextState = Tape5ReverseEscapeState;
@@ -156,7 +179,6 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     case SearchTimedStrafeState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotStepper_Disable();
             DriveBeaconSearchStrafe();
             searchTimedStartMs = ES_Timer_GetTime();
             if (ES_Timer_StartTimer(SHOOT_TIMER) == -1) {
@@ -203,7 +225,6 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     case SearchUntilTapeState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotStepper_Disable();
             DriveBeaconSearchStrafe();
             break;
         case TapeChangedEvent:
@@ -266,6 +287,82 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
         }
         break;
 
+    case BeaconFineTuneTurnState:
+        switch (ThisEvent.EventType) {
+        case ES_ENTRY:
+            StartBeaconFineTuneTurn();
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(SHOOT_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == SHOOT_TIMER) {
+                uint16_t currentADC;
+
+                switch (fineTunePhase) {
+                case FineTuneInitialBrakePhase:
+                    IssueBeaconFineTuneTurn(fineTuneTurnLeft);
+                    fineTunePhase = FineTuneForwardPulsePhase;
+                    ES_Timer_InitTimer(SHOOT_TIMER,
+                            SHOOT_BEACON_FINE_TUNE_TURN_PULSE_MS);
+                    break;
+
+                case FineTuneForwardPulsePhase:
+                    RobotMotion_Stop();
+                    fineTunePhase = FineTuneForwardBrakePhase;
+                    ES_Timer_InitTimer(SHOOT_TIMER,
+                            SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+                    break;
+
+                case FineTuneForwardBrakePhase:
+                    currentADC = RobotSensors_GetBeaconADC();
+                    if (currentADC > fineTuneBestADC) {
+                        fineTuneBestADC = currentADC;
+                    }
+                    if ((BeaconFineTuneADCDecreased(currentADC) == TRUE) ||
+                            (fineTunePulseCount >=
+                            SHOOT_BEACON_FINE_TUNE_MAX_PULSES)) {
+                        IssueBeaconFineTuneTurn(fineTuneTurnLeft ? FALSE : TRUE);
+                        fineTunePhase = FineTuneBackPulsePhase;
+                        ES_Timer_InitTimer(SHOOT_TIMER,
+                                SHOOT_BEACON_FINE_TUNE_TURN_PULSE_MS);
+                    } else {
+                        IssueBeaconFineTuneTurn(fineTuneTurnLeft);
+                        fineTunePhase = FineTuneForwardPulsePhase;
+                        ES_Timer_InitTimer(SHOOT_TIMER,
+                                SHOOT_BEACON_FINE_TUNE_TURN_PULSE_MS);
+                    }
+                    break;
+
+                case FineTuneBackPulsePhase:
+                    RobotMotion_Stop();
+                    fineTunePhase = FineTuneBackBrakePhase;
+                    ES_Timer_InitTimer(SHOOT_TIMER,
+                            SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+                    break;
+
+                case FineTuneBackBrakePhase:
+                    FinishBeaconFineTuneTurn(&nextState, &makeTransition,
+                            &ThisEvent);
+                    break;
+
+                default:
+                    FinishBeaconFineTuneTurn(&nextState, &makeTransition,
+                            &ThisEvent);
+                    break;
+                }
+                ThisEvent.EventType = ES_NO_EVENT;
+            }
+            break;
+        case BeaconADCIncreaseEvent:
+        case MaxSignalFoundEvent:
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        default:
+            break;
+        }
+        break;
+
     case InitialStepperFallState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
@@ -295,16 +392,25 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             RobotMotion_Stop();
+            if (ShootCycleExpired() == TRUE) {
+                nextState = DoneShootState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+                break;
+            }
             savedLauncherStep = RobotLauncher_GetTargetStepForBeaconADC(maxBeaconADC);
-            RobotStepper_MoveToStep(savedLauncherStep);
-            ThisEvent.EventType = SetEvent;
-            PostRobotHSM(ThisEvent);
+            RobotLauncher_LogAimLUTSelection(maxBeaconADC);
+            StepLauncherTowardTarget(savedLauncherStep, RunShooterState,
+                    &nextState, &makeTransition, &ThisEvent);
             break;
-        case SetEvent:
-            nextState = (ShootCycleExpired() == TRUE) ?
-                    DoneShootState : RunShooterState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+        case ES_EXIT:
+            ES_Timer_StopTimer(SHOOT_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == SHOOT_TIMER) {
+                StepLauncherTowardTarget(savedLauncherStep, RunShooterState,
+                        &nextState, &makeTransition, &ThisEvent);
+            }
             break;
         default:
             break;
@@ -347,10 +453,24 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
     case ReloadRaiseState:
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
-            RobotStepper_MoveToStep(LAUNCHER_STEPPER_RELOAD_STEP);
-            nextState = ReloadHoldState;
-            makeTransition = TRUE;
-            ThisEvent.EventType = ES_NO_EVENT;
+            if (ShootCycleExpired() == TRUE) {
+                nextState = DoneShootState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+                break;
+            }
+            StepLauncherTowardTarget(LAUNCHER_STEPPER_RELOAD_STEP,
+                    ReloadHoldState, &nextState, &makeTransition, &ThisEvent);
+            break;
+        case ES_EXIT:
+            ES_Timer_StopTimer(SHOOT_TIMER);
+            break;
+        case ES_TIMEOUT:
+            if (ThisEvent.EventParam == SHOOT_TIMER) {
+                StepLauncherTowardTarget(LAUNCHER_STEPPER_RELOAD_STEP,
+                        ReloadHoldState, &nextState, &makeTransition,
+                        &ThisEvent);
+            }
             break;
         default:
             break;
@@ -359,16 +479,27 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
 
     case ReloadHoldState:
         switch (ThisEvent.EventType) {
-        case ES_ENTRY:
+        case ES_ENTRY: {
+            uint32_t remainingMs = ShootCycleRemainingMs();
+            if (remainingMs == 0u) {
+                nextState = DoneShootState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+                break;
+            }
             RobotStepper_Enable();
-            ES_Timer_InitTimer(SHOOT_TIMER, SHOOT_RELOAD_HOLD_MS);
+            ES_Timer_InitTimer(SHOOT_TIMER,
+                    (remainingMs < SHOOT_RELOAD_HOLD_MS) ?
+                    remainingMs : SHOOT_RELOAD_HOLD_MS);
             break;
+        }
         case ES_EXIT:
             ES_Timer_StopTimer(SHOOT_TIMER);
             break;
         case ES_TIMEOUT:
             if (ThisEvent.EventParam == SHOOT_TIMER) {
-                nextState = ReloadFallState;
+                nextState = (ShootCycleExpired() == TRUE) ?
+                        DoneShootState : ReloadFallState;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
             }
@@ -380,10 +511,20 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
 
     case ReloadFallState:
         switch (ThisEvent.EventType) {
-        case ES_ENTRY:
+        case ES_ENTRY: {
+            uint32_t remainingMs = ShootCycleRemainingMs();
+            if (remainingMs == 0u) {
+                nextState = DoneShootState;
+                makeTransition = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+                break;
+            }
             RobotStepper_Disable();
-            ES_Timer_InitTimer(SHOOT_TIMER, SHOOT_STEPPER_FALL_MS);
+            ES_Timer_InitTimer(SHOOT_TIMER,
+                    (remainingMs < SHOOT_STEPPER_FALL_MS) ?
+                    remainingMs : SHOOT_STEPPER_FALL_MS);
             break;
+        }
         case ES_EXIT:
             ES_Timer_StopTimer(SHOOT_TIMER);
             break;
@@ -557,7 +698,8 @@ static uint8_t HandleBeaconSearchEvent(ES_Event event,
         return TRUE;
     case MaxSignalFoundEvent:
         maxBeaconADC = event.EventParam;
-        *nextState = InitialStepperFallState;
+        fineTuneTurnLeft = (strafeRight == TRUE) ? TRUE : FALSE;
+        *nextState = BeaconFineTuneTurnState;
         *makeTransition = TRUE;
         return TRUE;
     case MisalignedEvent:
@@ -613,6 +755,57 @@ static void PauseForGyroAlign(void)
 static void StartGyroAlign(void)
 {
     InitGyroAlignSubHSM(MOVEMENT_AXIS_HORIZONTAL, TURN_PIVOT_CENTER, 0.0f, 0.0f);
+}
+
+static void StartBeaconFineTuneTurn(void)
+{
+    RobotMotion_Stop();
+    fineTunePhase = FineTuneInitialBrakePhase;
+    fineTuneBestADC = RobotSensors_GetBeaconADC();
+    fineTunePulseCount = 0u;
+    ES_Timer_InitTimer(SHOOT_TIMER, SHOOT_BEACON_FINE_TUNE_BRAKE_MS);
+}
+
+static void IssueBeaconFineTuneTurn(uint8_t turnLeft)
+{
+    fineTunePulseCount++;
+    if (turnLeft == TRUE) {
+        RobotMotion_TurnLeftAbout(TURN_PIVOT_CENTER, ALIGN_SPEED_IPS);
+    } else {
+        RobotMotion_TurnRightAbout(TURN_PIVOT_CENTER, ALIGN_SPEED_IPS);
+    }
+}
+
+static uint8_t BeaconFineTuneADCDecreased(uint16_t currentADC)
+{
+    return (((uint32_t) currentADC + SHOOT_BEACON_FINE_TUNE_MARGIN_ADC) <
+            (uint32_t) fineTuneBestADC) ? TRUE : FALSE;
+}
+
+static void FinishBeaconFineTuneTurn(ShootingState_t *nextState,
+        uint8_t *makeTransition, ES_Event *event)
+{
+    RobotMotion_Stop();
+    maxBeaconADC = fineTuneBestADC;
+    *nextState = InitialStepperFallState;
+    *makeTransition = TRUE;
+    event->EventType = ES_NO_EVENT;
+}
+
+static void StepLauncherTowardTarget(int16_t targetStep,
+        ShootingState_t arrivedState, ShootingState_t *nextState,
+        uint8_t *makeTransition, ES_Event *event)
+{
+    if (ShootCycleExpired() == TRUE) {
+        *nextState = DoneShootState;
+        *makeTransition = TRUE;
+    } else if (RobotStepper_StepTowardTarget(targetStep) == TRUE) {
+        *nextState = arrivedState;
+        *makeTransition = TRUE;
+    } else {
+        ES_Timer_InitTimer(SHOOT_TIMER, SHOOT_STEPPER_STEP_INTERVAL_MS);
+    }
+    event->EventType = ES_NO_EVENT;
 }
 
 static uint32_t ShootCycleRemainingMs(void)
