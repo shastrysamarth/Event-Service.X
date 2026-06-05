@@ -11,6 +11,8 @@
 #include "RobotSensors.h"
 #include "RobotStepper.h"
 
+#include <stdio.h>
+
 typedef enum {
     InitPShootState,
     AlignBeforeSearchState,
@@ -50,6 +52,7 @@ static uint8_t searchTargetTapeMask = TAPE_SENSOR_4_MASK;
 static BoundaryChoice_t boundary_choice = BOUNDARY_BOTTOM;
 static ShootingState_t searchResumeState = SearchTimedStrafeState;
 static ShootingState_t returnStateAfterAlign = SearchBeaconMaxState;
+static uint8_t searchTargetEdgeArmed = TRUE;
 static uint16_t searchTimedRemainingMs = SHOOT_BEACON_SEARCH_STRAFE_MS;
 static uint32_t searchTimedStartMs = 0u;
 static uint32_t shootCycleStartMs = 0u;
@@ -85,6 +88,7 @@ uint8_t InitShootingSubHSM(BoundaryChoice_t startingBoundary)
     SetSearchDirectionForBoundary(boundary_choice);
     searchResumeState = SearchTimedStrafeState;
     returnStateAfterAlign = SearchBeaconMaxState;
+    searchTargetEdgeArmed = TRUE;
     searchTimedRemainingMs = SHOOT_BEACON_SEARCH_STRAFE_MS;
     searchTimedStartMs = 0u;
     shootCycleStartMs = 0u;
@@ -109,6 +113,7 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
             RobotStepper_Disable();
             SetSearchDirectionForBoundary(boundary_choice);
             returnStateAfterAlign = SearchBeaconMaxState;
+            searchTargetEdgeArmed = TRUE;
             shootCycleStartMs = 0u;
             savedLauncherStep = LAUNCHER_STEPPER_HOME_STEP;
             StartGyroAlign();
@@ -155,10 +160,14 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
             DriveBeaconSearchStrafe();
             searchTimedStartMs = ES_Timer_GetTime();
             if (ES_Timer_StartTimer(SHOOT_TIMER) == -1) {
+                printf("[SearchTimedStrafeState] INIT %dms\n", searchTimedRemainingMs);
                 ES_Timer_InitTimer(SHOOT_TIMER, searchTimedRemainingMs);
+            } else {
+                printf("[SearchTimedStrafeState] START %dms\n", searchTimedRemainingMs);
             }
             break;
         case ES_EXIT:
+            printf("[SearchTimedStrafeState] STOP %dms\n", searchTimedRemainingMs);
             ES_Timer_StopTimer(SHOOT_TIMER);
             break;
         case TapeChangedEvent:
@@ -171,8 +180,12 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
             break;
         case ES_TIMEOUT:
             if (ThisEvent.EventParam == SHOOT_TIMER) {
+                printf("[SearchTimedStrafeState] RESET\n");
                 ES_Timer_SetTimer(SHOOT_TIMER, searchTimedRemainingMs);
                 searchTimedRemainingMs = SHOOT_BEACON_SEARCH_STRAFE_MS;
+                searchTargetEdgeArmed =
+                        ((LiveTapeMask() & searchTargetTapeMask) == 0u) ?
+                        TRUE : FALSE;
                 nextState = SearchUntilTapeState;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
@@ -191,15 +204,7 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
         switch (ThisEvent.EventType) {
         case ES_ENTRY:
             RobotStepper_Disable();
-            if ((LiveTapeMask() & searchTargetTapeMask) != 0u) {
-                SetSearchDirectionFromReachedTarget();
-                searchTimedRemainingMs = SHOOT_BEACON_SEARCH_STRAFE_MS;
-                nextState = SearchTimedStrafeState;
-                makeTransition = TRUE;
-                ThisEvent.EventType = ES_NO_EVENT;
-            } else {
-                DriveBeaconSearchStrafe();
-            }
+            DriveBeaconSearchStrafe();
             break;
         case TapeChangedEvent:
             if (Tape5TurnedOn(ThisEvent) == TRUE) {
@@ -207,7 +212,12 @@ ES_Event RunShootingSubHSM(ES_Event ThisEvent)
                 nextState = Tape5ReverseEscapeState;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
-            } else if (SearchTargetTapeOn(ThisEvent) == TRUE) {
+            } else if (((TapeEventChangedMask(ThisEvent) & searchTargetTapeMask) != 0u) &&
+                    ((TapeEventCurrentMask(ThisEvent) & searchTargetTapeMask) == 0u)) {
+                searchTargetEdgeArmed = TRUE;
+                ThisEvent.EventType = ES_NO_EVENT;
+            } else if ((searchTargetEdgeArmed == TRUE) &&
+                    (SearchTargetTapeOn(ThisEvent) == TRUE)) {
                 SetSearchDirectionFromReachedTarget();
                 searchTimedRemainingMs = SHOOT_BEACON_SEARCH_STRAFE_MS;
                 nextState = SearchTimedStrafeState;

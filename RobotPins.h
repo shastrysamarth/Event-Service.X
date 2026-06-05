@@ -93,11 +93,11 @@
 #endif
 /* [MOTOR] drive command + "(stop by <fn>)" control-change logs. */
 #ifndef ROBOT_LOG_MOTOR
-#define ROBOT_LOG_MOTOR 0
+#define ROBOT_LOG_MOTOR ROBOT_CHATTY_LOGS
 #endif
 /* [EVENT] event posts from checkers, plus beacon peak/min tracking. */
 #ifndef ROBOT_LOG_EVENTS
-#define ROBOT_LOG_EVENTS 1
+#define ROBOT_LOG_EVENTS ROBOT_CHATTY_LOGS
 #endif
 /* [TAPE] change-mask logs from the tape event checker. */
 #ifndef ROBOT_LOG_TAPE
