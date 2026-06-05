@@ -23,12 +23,15 @@
 
 #define FIND_FRONT_IMU_SETTLE_MS 3000u
 #define TURN_IMU_SETTLE_MS 100u
-#define SHOOT_TIME_MS 120000u
+#define SHOOT_CYCLE_TOTAL_MS 60000u
+#define SHOOTER_RUN_MS 2500u
+#define SHOOT_RELOAD_HOLD_MS 1000u
+#define SHOOT_STEPPER_FALL_MS 500u
 
 /* FindFrontTape approach timings (reuse FIND_FRONT_IMU_TIMER, states are serial). */
 #define FRONT_TAPE_CONFIRM_MS 20u
 #define FRONT_TAPE_BACKUP_MS 500u
-#define FRONT_TAPE_RECOVER_TURN_MS 2u
+#define FRONT_TAPE_RECOVER_TURN_MS 10u
 
 #define FIND_FRONT_IMU_TIMER 0
 #define NAV_SETTLE_TIMER 1
@@ -71,20 +74,18 @@
 #define IMU_MODE_CHECK_PERIOD_MS 250u
 #define IMU_DEBUG_STREAM_PERIOD_MS 250u
 #define ALIGN_STABLE_SAMPLE_COUNT 3u
-#ifndef ROBOT_REALTIME_TRACE
-#define ROBOT_REALTIME_TRACE 0
-#endif
-/* Master switch for the high-rate per-event trace logs. These print on every
- * event and can back up the UART / event queues and slow sensor sampling. Set
- * to 0 to silence them (one-shot init + snapshot logs still obey ROBOT_DEBUG);
- * set to 1 to restore the verbose tracing while debugging.
- *
- * Each log family below defaults to this global value but can be overridden
- * individually on the build command line, e.g.:
- *     -DROBOT_CHATTY_LOGS=0 -DROBOT_LOG_MOTOR=1 -DROBOT_LOG_ALIGN=1
- * turns everything off except the motor-control and align traces. */
+/* Master switch for high-rate debug logs ([STATE], [NAV], [TAPE], [BUMP],
+ * [MOTOR], [ALIGN], per-event checker traces, etc.). Set to 0 to silence UART-
+ * heavy tracing; set to 1 while debugging. Override per family on the build line,
+ * e.g. -DROBOT_CHATTY_LOGS=0 -DROBOT_LOG_MOTOR=1 keeps only motor traces. */
 #ifndef ROBOT_CHATTY_LOGS
 #define ROBOT_CHATTY_LOGS 1
+#endif
+/* Per-event / high-rate traces ([IMU] misalign, per-sensor [TAPE]/[BUMP],
+ * [BEACON] events, verbose [MOTOR] distance-move lines). Defaults on with
+ * ROBOT_CHATTY_LOGS; override alone via -DROBOT_REALTIME_TRACE=0. */
+#ifndef ROBOT_REALTIME_TRACE
+#define ROBOT_REALTIME_TRACE ROBOT_CHATTY_LOGS
 #endif
 /* [STATE] state-entry logs (RobotDebug_LogStateEntry / ROBOT_DEBUG_STATE). */
 #ifndef ROBOT_LOG_STATE
@@ -92,7 +93,11 @@
 #endif
 /* [MOTOR] drive command + "(stop by <fn>)" control-change logs. */
 #ifndef ROBOT_LOG_MOTOR
-#define ROBOT_LOG_MOTOR ROBOT_CHATTY_LOGS
+#define ROBOT_LOG_MOTOR 0
+#endif
+/* [EVENT] event posts from checkers, plus beacon peak/min tracking. */
+#ifndef ROBOT_LOG_EVENTS
+#define ROBOT_LOG_EVENTS 1
 #endif
 /* [TAPE] change-mask logs from the tape event checker. */
 #ifndef ROBOT_LOG_TAPE
@@ -107,10 +112,12 @@
 #define ROBOT_LOG_NAV ROBOT_CHATTY_LOGS
 #endif
 /* [ALIGN] gyro heading + turn-direction traces while aligning. */
+#define ROBOT_LOG_ALIGN 0
 #ifndef ROBOT_LOG_ALIGN
 #define ROBOT_LOG_ALIGN ROBOT_CHATTY_LOGS
 #endif
 /* [IMU] heading re-zero events (RobotIMU_ZeroHeading). */
+#define ROBOT_LOG_IMU 0
 #ifndef ROBOT_LOG_IMU
 #define ROBOT_LOG_IMU ROBOT_CHATTY_LOGS
 #endif
@@ -126,13 +133,12 @@
  *   NAV_TAPE_RECOVERY_NUDGE_MS : fixed safe-side nudge after tape 3/4 drops.
  *   NAV_FORWARD_AFTER_BUMP_MS : short forward nudge off a bumped wall.
  *   NAV_BUMP_CROSS_STRAFE_MS : open-loop cross-field strafe after bump.
- *   NAV_FORWARD_TO_ISZ_MS     : forward creep before the final ISZ strafe.
- *   NAV_FINAL_STRAFE_IN       : open-loop strafe distance into the ISZ. */
+ *   NAV_FORWARD_TO_ISZ_MS     : forward creep before handing off to Shoot/ISZ. */
 #define NAV_TAPE_RECOVERY_NUDGE_MS 500u
 #define NAV_FORWARD_AFTER_BUMP_MS 100u
 #define NAV_BUMP_CROSS_STRAFE_MS 1500u
-#define NAV_FORWARD_TO_ISZ_MS 200u
-#define NAV_FINAL_STRAFE_IN 5.0f
+#define NAV_FORWARD_TO_ISZ_MS 800u
+#define SHOOT_BEACON_SEARCH_STRAFE_MS 1500u
 
 /* Tape event params use bit = 1 when that tape sensor is on tape. */
 #define TAPE_SENSOR_1_MASK (1u << 0)
@@ -262,8 +268,12 @@
  * #define SOLENOID_ON_ADC_THRESHOLD 700u
  * #define SOLENOID_ON_IS_HIGH 1
  */
-#define BEACON_INCREASE_ADC_DELTA 15u
-#define BEACON_DECREASE_ADC_DELTA 8u
+/* First-stage beacon acquisition while the robot is close to the beacon. */
+#define BEACON_INCREASE_ADC_DELTA 4u
+#define BEACON_DECREASE_ADC_DELTA 4u
+/* Shooting-stage beacon search from farther back in the field. */
+#define SHOOTING_BEACON_INCREASE_ADC_DELTA 8u
+#define SHOOTING_BEACON_DECREASE_ADC_DELTA 8u
 
 /*
  * L298N H-bridge 1 controls front motors:
@@ -308,23 +318,26 @@
 #define MOTOR_RL_IN2_LAT PORTW06_LAT
 
 /* DRV8811-like stepper module:
- *   ENABLE is hard-wired to constant 3.3V
+ *   ENABLE -> X3 digital output, active-low
  *   STEP -> Y6 digital output
  *   DIR  -> Y7 digital output
  *   OUT1/OUT2 -> NEMA17 coil A+/A-
  *   OUT3/OUT4 -> NEMA17 coil B+/B-
  */
+#define STEPPER_ENABLE_TRIS PORTX03_TRIS
+#define STEPPER_ENABLE_LAT PORTX03_LAT
 #define STEPPER_STEP_TRIS PORTY06_TRIS
 #define STEPPER_STEP_LAT PORTY06_LAT
 #define STEPPER_DIR_TRIS PORTY07_TRIS
 #define STEPPER_DIR_LAT PORTY07_LAT
-#define STEPPER_HAS_ENABLE_PIN 0
-#define STEPPER_ENABLE_ACTIVE_LOW 0
+#define STEPPER_HAS_ENABLE_PIN 1
+#define STEPPER_ENABLE_ACTIVE_LOW 1
 #define STEPPER_FULL_STEPS_PER_REV 200u
 #define STEPPER_FULL_STEP_DEG 1.8f
 #define LAUNCHER_STEPPER_MIN_STEP 0
-#define LAUNCHER_STEPPER_MAX_STEP 45
+#define LAUNCHER_STEPPER_MAX_STEP 15
 #define LAUNCHER_STEPPER_HOME_STEP 0
+#define LAUNCHER_STEPPER_RELOAD_STEP LAUNCHER_STEPPER_MAX_STEP
 
 /* Polarity is calibrated so positive wheel speed means robot-forward wheel motion. */
 #define MOTOR_FL_POLARITY (-1)
@@ -377,6 +390,6 @@
 #define LAUNCHER_SERVO_PIN_LABEL "RC servo Z8"
 #define SHOOTER_MOTOR_PIN_LABEL "TIP122 input -> PWM X11"
 #define SHOOTER_MOTOR_ADC_PIN_LABEL "[FLAG][#1] remap; W5 is H-bridge 2 RR IN2"
-#define STEPPER_PIN_LABEL "ENABLE -> constant 3.3V, STEP -> Y6, DIR -> Y7"
+#define STEPPER_PIN_LABEL "ENABLE -> X3 digital output active-low, STEP -> Y6, DIR -> Y7"
 
 #endif /* ROBOT_PINS_H */

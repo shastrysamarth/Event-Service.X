@@ -42,7 +42,7 @@
  *       ForwardBump2 --timeout--> CrossStrafeRight(1500ms)
  *       CrossStrafeRight --timeout--> SearchStrafeRight
  *       SearchStrafeRight --Tape4 on--> Reverse3
- *   Reverse2 --Tape2 and Tape3 on--> Forward2(200ms) --> StrafeRight5in --> ReachedISZ
+ *   Reverse2 --Tape2 and Tape3 on--> Forward2(800ms) --> ReachedISZ
  *
  *   Reverse3 --Tape4 off--> Tape4NudgeLeft(500ms) --> Tape4SearchRight
  *       Tape4SearchRight --Tape4 on--> Reverse3
@@ -50,7 +50,7 @@
  *       ForwardBump3 --timeout--> CrossStrafeLeft(1500ms)
  *       CrossStrafeLeft --timeout--> SearchStrafeLeft
  *       SearchStrafeLeft --Tape3 on--> Reverse2
- *   Reverse3 --Tape2 and Tape4 on--> Forward3(200ms) --> StrafeLeft5in --> ReachedISZ
+ *   Reverse3 --Tape2 and Tape4 on--> Forward3(800ms) --> ReachedISZ
  */
 typedef enum {
     InitPSubState,
@@ -63,7 +63,6 @@ typedef enum {
     CrossStrafeRightState,
     SearchStrafeRightState,
     Forward2State,
-    StrafeRight5State,
     Reverse3State,
     Tape4NudgeLeftState,
     Tape4SearchRightState,
@@ -71,7 +70,6 @@ typedef enum {
     CrossStrafeLeftState,
     SearchStrafeLeftState,
     Forward3State,
-    StrafeLeft5State,
     AlignState,
 } NavigateState_t;
 
@@ -86,7 +84,6 @@ static const char *StateNames[] = {
     "CrossStrafeRightState",
     "SearchStrafeRightState",
     "Forward2State",
-    "StrafeRight5State",
     "Reverse3State",
     "Tape4NudgeLeftState",
     "Tape4SearchRightState",
@@ -94,7 +91,6 @@ static const char *StateNames[] = {
     "CrossStrafeLeftState",
     "SearchStrafeLeftState",
     "Forward3State",
-    "StrafeLeft5State",
     "AlignState",
 };
 
@@ -145,17 +141,6 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
     ES_Tattle();
     ROBOT_DEBUG_STATE("NavigateToISZ", StateNames[CurrentState], ThisEvent);
 
-#if defined(DEBUG) || defined(ROBOT_DEBUG)
-    if ((ThisEvent.EventType != ES_ENTRY) && (ThisEvent.EventType != ES_EXIT) &&
-            (ThisEvent.EventType != ES_INIT) &&
-            (ThisEvent.EventType != ES_NO_EVENT)) {
-        NAV_TRACE("[NAV] evt=%s param=0x%X state=%s\r\n",
-                EventNames[ThisEvent.EventType],
-                (unsigned int) ThisEvent.EventParam,
-                StateNames[CurrentState]);
-    }
-#endif
-
     if (HandleAlignTriggerEvent(&ThisEvent, &nextState, &makeTransition) == FALSE) {
     switch (CurrentState) {
     case InitPSubState:
@@ -163,7 +148,6 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             RobotIMU_EnsureNDOF();
             RobotIMU_Update();
             savedHeadingRefDeg = RobotIMU_GetReferenceHeadingDeg();
-            NAV_TRACE("[NAV] entry: preserving savedHeadingRef\r\n");
             SetMovementAxis(MOVEMENT_AXIS_VERTICAL);
             nextState = Reverse1State;
             makeTransition = TRUE;
@@ -197,6 +181,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             break;
         case TapeChangedEvent:
             if (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
+                boundary_choice = BOUNDARY_BOTTOM;
                 nextState = Reverse2State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
@@ -337,6 +322,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             break;
         case TapeChangedEvent:
             if (TapeRising(ThisEvent, TAPE_SENSOR_4_MASK) == TRUE) {
+                boundary_choice = BOUNDARY_TOP;
                 nextState = Reverse3State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
@@ -359,28 +345,10 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             break;
         case ES_TIMEOUT:
             if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
-                nextState = StrafeRight5State;
-                makeTransition = TRUE;
+                RobotMotion_Stop();
+                PostReachedISZ();
                 ThisEvent.EventType = ES_NO_EVENT;
             }
-            break;
-        default:
-            break;
-        }
-        break;
-
-    case StrafeRight5State:
-        switch (ThisEvent.EventType) {
-        case ES_ENTRY:
-            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-            RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_X, 1,
-                    NAV_FINAL_STRAFE_IN, STRAFE_SPEED_IPS);
-            RobotMotion_StrafeRight(STRAFE_SPEED_IPS);
-            break;
-        case DistanceMoveCompleteEvent:
-            RobotMotion_Stop();
-            PostReachedISZ();
-            ThisEvent.EventType = ES_NO_EVENT;
             break;
         default:
             break;
@@ -517,6 +485,7 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             break;
         case TapeChangedEvent:
             if (TapeRising(ThisEvent, TAPE_SENSOR_3_MASK) == TRUE) {
+                boundary_choice = BOUNDARY_BOTTOM;
                 nextState = Reverse2State;
                 makeTransition = TRUE;
                 ThisEvent.EventType = ES_NO_EVENT;
@@ -539,8 +508,8 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
             break;
         case ES_TIMEOUT:
             if (ThisEvent.EventParam == NAV_SETTLE_TIMER) {
-                nextState = StrafeLeft5State;
-                makeTransition = TRUE;
+                RobotMotion_Stop();
+                PostReachedISZ();
                 ThisEvent.EventType = ES_NO_EVENT;
             }
             break;
@@ -549,31 +518,17 @@ ES_Event RunNavigateToISZSubHSM(ES_Event ThisEvent)
         }
         break;
 
-    case StrafeLeft5State:
-        switch (ThisEvent.EventType) {
-        case ES_ENTRY:
-            SetMovementAxis(MOVEMENT_AXIS_HORIZONTAL);
-            RobotMotion_StartDistanceMoveAtSpeed(DISTANCE_AXIS_X, -1,
-                    NAV_FINAL_STRAFE_IN, STRAFE_SPEED_IPS);
-            RobotMotion_StrafeLeft(STRAFE_SPEED_IPS);
-            break;
-        case DistanceMoveCompleteEvent:
-            RobotMotion_Stop();
-            PostReachedISZ();
+    case AlignState:
+        if (ThisEvent.EventType == ES_ENTRY) {
+            /* InitGyroAlignSubHSM already entered the align sub-HSM before
+             * Navigate transitions here; forwarding ES_ENTRY would restart the
+             * first gyro pulse and timer. */
             ThisEvent.EventType = ES_NO_EVENT;
             break;
-        default:
-            break;
         }
-        break;
-
-    case AlignState:
         ThisEvent = RunAlignSubHSM(ThisEvent);
         if (ThisEvent.EventType == RealignedEvent) {
             AcceptCurrentAlignment(ThisEvent.EventParam);
-            NAV_TRACE("[NAV] align-done -> %s (src=%u)\r\n",
-                    StateNames[returnStateAfterAlign],
-                    (unsigned int) ThisEvent.EventParam);
             nextState = returnStateAfterAlign;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -771,7 +726,6 @@ static void BeginAlignForState(NavigateState_t state)
     RobotMotion_PauseDistanceMove();
     /* Active-brake the current drive command before the align takes over. */
     RobotMotion_Stop();
-    NAV_TRACE("[NAV] gyro-align-start from=%s\r\n", StateNames[state]);
     /* Gyro align only uses the latched reference heading; the x/y refs are
      * passed for API compatibility and ignored by the heading control. */
     InitGyroAlignSubHSM(movement_axis, PivotForState(state), x_ref, y_ref);
@@ -790,6 +744,6 @@ static void PostReachedISZ(void)
     ES_Event event;
 
     event.EventType = ReachedISZEvent;
-    event.EventParam = 0u;
+    event.EventParam = (uint16_t) boundary_choice;
     PostRobotHSM(event);
 }

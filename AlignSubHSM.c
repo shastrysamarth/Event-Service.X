@@ -63,8 +63,9 @@
  *  off on entry and on at exit we synthesize a TapeChangedEvent rising edge and
  *  post it to the top so the returned-to nav state can switch strafe -> reverse.
  *
- *  GYRO mode (ShootingSubHSM and gyro nav states) is unchanged and driven
- *  continuously by AlignSubHSM_UpdateControl(). */
+ *  GYRO mode defers exact change events it receives while turning and replays
+ *  those same events on exit, so caller states do not miss edges that occurred
+ *  while align owned the drive. */
 typedef enum {
     InitPAlignState,
     GyroHeadingAlignState,
@@ -98,6 +99,9 @@ static uint16_t alignTimerMs = ALIGN_TIMER_START_MS;
 /* Tape sensor mask sampled when align started, used to detect a corner-sensor
  * rising edge between entry and exit. */
 static uint8_t tapeEntryMask = 0u;
+#define GYRO_DEFERRED_EVENT_CAPACITY 4u
+static ES_Event gyroDeferredEvents[GYRO_DEFERRED_EVENT_CAPACITY];
+static uint8_t gyroDeferredEventCount = 0u;
 /* Corner sensor for the active axis/boundary (2 horizontal, 4 top, 3 bottom). */
 static uint8_t cornerSensor = 2u;
 /* Latched TRUE once the corner sensor has been seen on during the primary run. */
@@ -118,6 +122,7 @@ static float AbsFloat(float value);
 static uint8_t StableCheck(uint8_t inThreshold, uint8_t *sampleCounter);
 static uint8_t TapeMaskForSensor(uint8_t sensorNumber);
 static uint8_t LiveTapeMask(void);
+static uint8_t LiveBumpMask(void);
 static uint8_t CornerIsOn(void);
 static uint8_t CenterTapeIsOn(void);
 static uint8_t Tape5Edge(ES_Event event, uint8_t wantOn);
@@ -125,6 +130,10 @@ static uint8_t CornerSensorForAlign(void);
 static uint8_t GyroHeadingIsStraight(void);
 static uint16_t GyroTurnPulseMs(void);
 static void IssueGyroHeadingTurn(void);
+static void ClearGyroDeferredEvents(void);
+static void RecordGyroDeferredEvent(ES_Event event);
+static void FlushGyroDeferredEvents(void);
+static void ReassertGyroSensorEvents(void);
 static uint8_t TapeHeadingIsStraight(void);
 static void IssueTapeHeadingTurn(void);
 static void IssueTapeSearchMotion(uint8_t primary);
@@ -228,6 +237,15 @@ ES_Event RunAlignSubHSM(ES_Event ThisEvent)
                     }
                 }
             }
+            break;
+        case BeaconADCIncreaseEvent:
+        case MaxSignalFoundEvent:
+            RecordGyroDeferredEvent(ThisEvent);
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        case TapeChangedEvent:
+        case BumpChangedEvent:
+            ThisEvent.EventType = ES_NO_EVENT;
             break;
         case PositionRealignedEvent:
             ThisEvent.EventType = ES_NO_EVENT;
@@ -528,9 +546,8 @@ static uint8_t InitAlignCommon(AlignMode_t mode, MovementAxis_t axis,
     cornerSeen = FALSE;
     jitterBraking = FALSE;
     gyroAlignPulseCount = 0u;
-    /* Snapshot the tape sensors so the corner rising-edge can be detected when
-     * align finishes. */
-    tapeEntryMask = LiveTapeMask();
+    tapeEntryMask = (mode == ALIGN_MODE_TAPE) ? LiveTapeMask() : 0u;
+    ClearGyroDeferredEvents();
 #if ALIGN_LOG_ENABLED
     lastAlignAction = "none";
     if (mode == ALIGN_MODE_TAPE) {
@@ -582,6 +599,20 @@ static uint8_t LiveTapeMask(void)
         if ((RobotPlugPlay_IsTapeEnabled(sensor) == TRUE) &&
                 (RobotSensors_IsTapeOn((TapeSensor_t) sensor) == TRUE)) {
             mask |= TapeMaskForSensor(sensor);
+        }
+    }
+    return mask;
+}
+
+static uint8_t LiveBumpMask(void)
+{
+    uint8_t mask = 0u;
+    uint8_t sensor;
+
+    for (sensor = 1u; sensor <= 4u; sensor++) {
+        if ((RobotPlugPlay_IsBumpEnabled(sensor) == TRUE) &&
+                (RobotSensors_IsBumpOn((BumpSensor_t) sensor) == TRUE)) {
+            mask |= (uint8_t) (1u << (sensor - 1u));
         }
     }
     return mask;
@@ -657,6 +688,57 @@ static void IssueGyroHeadingTurn(void)
     printf("[ALIGN] gyro pulse %ums (pulse %u)\r\n",
             (unsigned int) GyroTurnPulseMs(),
             (unsigned int) gyroAlignPulseCount);
+#endif
+}
+
+static void ClearGyroDeferredEvents(void)
+{
+    gyroDeferredEventCount = 0u;
+}
+
+static void RecordGyroDeferredEvent(ES_Event event)
+{
+    if (gyroDeferredEventCount >= GYRO_DEFERRED_EVENT_CAPACITY) {
+        return;
+    }
+
+    gyroDeferredEvents[gyroDeferredEventCount] = event;
+    gyroDeferredEventCount++;
+}
+
+static void FlushGyroDeferredEvents(void)
+{
+    uint8_t i;
+
+    for (i = 0u; i < gyroDeferredEventCount; i++) {
+        PostRobotHSM(gyroDeferredEvents[i]);
+#if ALIGN_LOG_ENABLED
+        printf("[ALIGN] replay %s param=0x%X\r\n",
+                EventNames[gyroDeferredEvents[i].EventType],
+                (unsigned int) gyroDeferredEvents[i].EventParam);
+#endif
+    }
+
+    ClearGyroDeferredEvents();
+}
+
+static void ReassertGyroSensorEvents(void)
+{
+    ES_Event event;
+    uint8_t tapeMask = LiveTapeMask();
+    uint8_t bumpMask = LiveBumpMask();
+
+    event.EventType = TapeChangedEvent;
+    event.EventParam = TAPE_EVENT_MAKE_PARAM(tapeMask, TAPE_SENSOR_ALL_MASK);
+    PostRobotHSM(event);
+
+    event.EventType = BumpChangedEvent;
+    event.EventParam = BUMP_EVENT_MAKE_PARAM(bumpMask, BUMP_SENSOR_ALL_MASK);
+    PostRobotHSM(event);
+#if ALIGN_LOG_ENABLED
+    printf("[ALIGN] reassert tape current=0x%02X bump current=0x%02X\r\n",
+            (unsigned int) tapeMask,
+            (unsigned int) bumpMask);
 #endif
 }
 
@@ -763,27 +845,9 @@ static void EnterTapeSearch(uint8_t primary)
 
 static void CompleteGyroRealign(ES_Event *event)
 {
-    uint8_t tape2Mask = TAPE_SENSOR_2_MASK;
-    uint8_t liveMask;
-    uint8_t tape2Changed;
-
     RobotMotion_Stop();
-
-    liveMask = LiveTapeMask();
-    tape2Changed = (((tapeEntryMask ^ liveMask) & tape2Mask) != 0u) ?
-            TRUE : FALSE;
-    if (tape2Changed == TRUE) {
-        ES_Event tapeEvent;
-
-        tapeEvent.EventType = TapeChangedEvent;
-        tapeEvent.EventParam = TAPE_EVENT_MAKE_PARAM(liveMask, tape2Mask);
-        PostRobotHSM(tapeEvent);
-#if ALIGN_LOG_ENABLED
-        printf("[ALIGN] tape2 change synthesized across gyro align entry=0x%02X exit=0x%02X\r\n",
-                (unsigned int) tapeEntryMask,
-                (unsigned int) liveMask);
-#endif
-    }
+    ReassertGyroSensorEvents();
+    FlushGyroDeferredEvents();
 
     event->EventType = RealignedEvent;
     event->EventParam = ALIGN_REALIGNED_SOURCE_SENSOR;

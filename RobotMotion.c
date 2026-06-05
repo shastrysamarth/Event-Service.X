@@ -237,7 +237,7 @@ void RobotMotion_StartDistanceMoveAtSpeed(DistanceAxis_t axis, int8_t direction,
     distanceRemainingMs = distanceDurationMs;
     distanceStartMs = ES_Timer_GetTime();
 
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_MOTOR
     printf("[MOTOR] distance-move start axis=%s dir=%d target=",
             (axis == DISTANCE_AXIS_X) ? "X" : "Y", (int) direction);
     PrintFixedInline(targetInches, "in");
@@ -252,7 +252,7 @@ void RobotMotion_StopDistanceMove(void)
     distanceMoveActive = FALSE;
     distanceMovePaused = FALSE;
     distanceRemainingMs = 0u;
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_MOTOR
     printf("[MOTOR] distance-move stop\r\n");
 #endif
 }
@@ -275,7 +275,7 @@ void RobotMotion_PauseDistanceMove(void)
     }
     distanceMoveActive = FALSE;
     distanceMovePaused = TRUE;
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_MOTOR
     printf("[MOTOR] distance-move pause remainingMs=%lu\r\n",
             (unsigned long) distanceRemainingMs);
 #endif
@@ -291,7 +291,7 @@ void RobotMotion_ResumeDistanceMove(void)
     distanceStartMs = ES_Timer_GetTime();
     distanceMoveActive = TRUE;
     distanceMovePaused = FALSE;
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_MOTOR
     printf("[MOTOR] distance-move resume remainingMs=%lu\r\n",
             (unsigned long) distanceDurationMs);
 #endif
@@ -348,7 +348,7 @@ const char *RobotMotion_GetPivotName(void)
 
 void RobotMotion_DebugPrintCurrentCommand(const char *context)
 {
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_MOTOR
     printf("[MOTOR] %s control=%s pivot=%s ", context,
             lastMotionCommand,
             lastMotionPivot);
@@ -436,7 +436,7 @@ static void SetDriveWheels(float frontLeft, float frontRight, float rearLeft, fl
     SetMotor(MOTOR_REAR_LEFT, lastRearLeftDuty);
     SetMotor(MOTOR_REAR_RIGHT, lastRearRightDuty);
 
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_MOTOR
     printf("[MOTOR] %s pivot=%s FL=%d FR=%d RL=%d RR=%d\r\n",
             lastMotionCommand, lastMotionPivot,
             lastFrontLeftDuty, lastFrontRightDuty,
@@ -460,7 +460,7 @@ static void BrakeAllWheels(void)
     SetMotorBrake(MOTOR_REAR_LEFT);
     SetMotorBrake(MOTOR_REAR_RIGHT);
 
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_MOTOR
     printf("[MOTOR] brake (dynamic) FL/FR/RL/RR\r\n");
 #endif
 }

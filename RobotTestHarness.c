@@ -18,6 +18,7 @@
 #include "timers.h"
 
 #include <stdio.h>
+#include <xc.h>
 
 #if defined(ROBOT_MOTOR_SENSOR_TEST) || defined(ROBOT_KEYBOARD_TEST)
 static uint8_t CommandUsesStrafeSpeed(const char *commandName);
@@ -110,6 +111,7 @@ static void BenchPrintSensor(BenchSensor_t sensor);
 static void BenchPrintTape(TapeSensor_t sensor, const char *name, const char *pinLabel);
 static void BenchPrintBump(BumpSensor_t sensor, const char *name, const char *pinLabel);
 static void BenchPrintBeacon(void);
+static void BenchInitStepperIdleLow(void);
 #ifdef ROBOT_IMU_ALIGN_BENCH
 static void BenchZeroGyroHeading(void);
 static void BenchPrintGyroHeading(const char *label);
@@ -137,9 +139,8 @@ void RobotTestHarness_RunMotorSensorBench(void)
 
     TIMERS_Init();
     RobotStepper_Init();
-    RobotStepper_ZeroPosition();
-    RobotStepper_Disable();
-    printf("[STEPPER] initialized at step 0; STEP/DIR driven LOW for bench idle\r\n");
+    BenchInitStepperIdleLow();
+    printf("[STEPPER] initialized at step 0; STEP/DIR LOW, enable disabled for bench idle\r\n");
     BenchPrintHelp();
     lastSensorPrintTime = TIMERS_GetTime();
 
@@ -202,8 +203,9 @@ static void BenchPrintHelp(void)
     printf("[MOTOR] strafe right expected wheel signs: FL- FR+ RL+ RR-\r\n");
     printf("[MOTOR] strafe left expected wheel signs:  FL+ FR- RL- RR+\r\n");
     printf("[SHOOTER] v shooter ON, c shooter OFF; x stops drive and shooter\r\n");
+    printf("[STEPPER] E enable/hold, D disable/fall; enable -> X3 active-low\r\n");
     printf("[STEPPER] [ one step forward, ] one step reverse\r\n");
-    printf("[STEPPER] { %u steps forward, } %u steps reverse; enable is hard-wired 3.3V\r\n",
+    printf("[STEPPER] { %u steps forward, } %u steps reverse\r\n",
             (unsigned int) STEPPER_BENCH_BURST_STEPS,
             (unsigned int) STEPPER_BENCH_BURST_STEPS);
     printf("[MOTOR] strafe commands use fixed %u in/s\r\n",
@@ -335,6 +337,14 @@ static void BenchHandleMotorKey(char key)
     case 'c':
         RobotLauncher_StopShooter();
         printf("[SHOOTER] OFF\r\n");
+        break;
+    case 'E':
+        RobotStepper_Enable();
+        printf("[STEPPER] ENABLED/HOLD on %s\r\n", STEPPER_PIN_LABEL);
+        break;
+    case 'D':
+        RobotStepper_Disable();
+        printf("[STEPPER] DISABLED/FALL on %s\r\n", STEPPER_PIN_LABEL);
         break;
     case '[':
         RobotStepper_Step(1u, TRUE);
@@ -681,6 +691,19 @@ static void BenchPrintBeacon(void)
             (unsigned int) smoothADC,
             (unsigned int) RobotSensors_BeaconDistanceFeetFromADC(smoothADC),
             BEACON_ADC_PIN_LABEL);
+}
+
+static void BenchInitStepperIdleLow(void)
+{
+    STEPPER_STEP_LAT = 0;
+    STEPPER_DIR_LAT = 0;
+    STEPPER_STEP_TRIS = 0;
+    STEPPER_DIR_TRIS = 0;
+#if STEPPER_HAS_ENABLE_PIN
+    STEPPER_ENABLE_LAT = STEPPER_ENABLE_ACTIVE_LOW ? 1 : 0;
+    STEPPER_ENABLE_TRIS = 0;
+#endif
+    RobotStepper_ZeroPosition();
 }
 
 #ifdef ROBOT_IMU_ALIGN_BENCH

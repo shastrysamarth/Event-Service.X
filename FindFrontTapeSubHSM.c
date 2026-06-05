@@ -8,6 +8,7 @@
 #include "RobotMotion.h"
 #include "RobotPins.h"
 #include "RobotSensors.h"
+#include "RobotStepper.h"
 
 typedef enum {
     InitPSubState,
@@ -34,9 +35,14 @@ static const char *StateNames[] = {
 };
 
 static FindFrontTapeState_t CurrentState = InitPSubState;
-static BoundaryChoice_t boundary_choice = BOUNDARY_TOP;
+static BoundaryChoice_t boundary_choice = BOUNDARY_BOTTOM;
 /* Set once we back up after first hitting tape 5; gates that one-shot maneuver. */
 static uint8_t BEHIND_TAPE = FALSE;
+#define FRONT_TAPE_DEFERRED_EVENT_CAPACITY 16u
+#define FRONT_TAPE_DEFERRED_TAPE_MASK \
+    (TAPE_SENSOR_1_MASK | TAPE_SENSOR_2_MASK | TAPE_SENSOR_5_MASK)
+static ES_Event frontTapeDeferredEvents[FRONT_TAPE_DEFERRED_EVENT_CAPACITY];
+static uint8_t frontTapeDeferredEventCount = 0u;
 /* While confirming a front-edge hit: which sensor confirms square (the OTHER
  * front edge), and which way to pivot if the confirm times out. */
 static uint8_t confirmPartnerMask = 0u;
@@ -45,6 +51,9 @@ static uint8_t recoverTurnLeft = FALSE;
 static uint8_t LiveTapeMask(void);
 static uint8_t EventTapeMaskOrLive(ES_Event event);
 static uint8_t EventTapeChangedMask(ES_Event event);
+static void ClearFrontTapeDeferredEvents(void);
+static void RecordFrontTapeDeferredEvent(ES_Event event);
+static void FlushFrontTapeDeferredEvents(void);
 static void PostFoundFrontTape(void);
 
 uint8_t InitFindFrontTapeSubHSM(void)
@@ -52,8 +61,9 @@ uint8_t InitFindFrontTapeSubHSM(void)
     ES_Event returnEvent;
 
     CurrentState = InitPSubState;
-    boundary_choice = BOUNDARY_TOP;
+    boundary_choice = BOUNDARY_BOTTOM;
     BEHIND_TAPE = FALSE;
+    ClearFrontTapeDeferredEvents();
     confirmPartnerMask = 0u;
     recoverTurnLeft = FALSE;
 
@@ -74,6 +84,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
     switch (CurrentState) {
     case InitPSubState:
         if (ThisEvent.EventType == ES_INIT) {
+            RobotStepper_Enable();
             nextState = WaitForIMUState;
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
@@ -110,6 +121,10 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
             makeTransition = TRUE;
             ThisEvent.EventType = ES_NO_EVENT;
             break;
+        case TapeChangedEvent:
+            RecordFrontTapeDeferredEvent(ThisEvent);
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
         default:
             break;
         }
@@ -123,8 +138,13 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
         case MaxSignalFoundEvent:
             RobotMotion_Stop();
             BEHIND_TAPE = FALSE;
+            FlushFrontTapeDeferredEvents();
             nextState = MoveForwardState;
             makeTransition = TRUE;
+            ThisEvent.EventType = ES_NO_EVENT;
+            break;
+        case TapeChangedEvent:
+            RecordFrontTapeDeferredEvent(ThisEvent);
             ThisEvent.EventType = ES_NO_EVENT;
             break;
         default:
@@ -146,7 +166,7 @@ ES_Event RunFindFrontTapeSubHSM(ES_Event ThisEvent)
                 if (((tapeMask & TAPE_SENSOR_3_MASK) != 0u) &&
                         ((tapeMask & TAPE_SENSOR_4_MASK) != 0u)) {
                     /* Square on the front line: center + both edge sensors. */
-                    boundary_choice = BOUNDARY_TOP;
+                    boundary_choice = BOUNDARY_BOTTOM;
                     RobotMotion_Stop();
                     PostFoundFrontTape();
                     ThisEvent.EventType = ES_NO_EVENT;
@@ -341,6 +361,49 @@ static uint8_t EventTapeChangedMask(ES_Event event)
         return TAPE_EVENT_CHANGED_MASK(event.EventParam);
     }
     return 0u;
+}
+
+static void ClearFrontTapeDeferredEvents(void)
+{
+    frontTapeDeferredEventCount = 0u;
+}
+
+static void RecordFrontTapeDeferredEvent(ES_Event event)
+{
+    uint8_t currentMask;
+    uint8_t changedMask;
+
+    if (event.EventType != TapeChangedEvent) {
+        return;
+    }
+
+    currentMask = (uint8_t) (TAPE_EVENT_CURRENT_MASK(event.EventParam) &
+            FRONT_TAPE_DEFERRED_TAPE_MASK);
+    changedMask = (uint8_t) (TAPE_EVENT_CHANGED_MASK(event.EventParam) &
+            FRONT_TAPE_DEFERRED_TAPE_MASK);
+    if (changedMask == 0u) {
+        return;
+    }
+
+    if (frontTapeDeferredEventCount >= FRONT_TAPE_DEFERRED_EVENT_CAPACITY) {
+        return;
+    }
+
+    event.EventParam = TAPE_EVENT_MAKE_PARAM(currentMask, changedMask);
+    frontTapeDeferredEvents[frontTapeDeferredEventCount] = event;
+    frontTapeDeferredEventCount++;
+}
+
+static void FlushFrontTapeDeferredEvents(void)
+{
+    ES_Event event;
+    uint8_t currentMask = (uint8_t) (LiveTapeMask() & FRONT_TAPE_DEFERRED_TAPE_MASK);
+
+    event.EventType = TapeChangedEvent;
+    event.EventParam = TAPE_EVENT_MAKE_PARAM(currentMask, FRONT_TAPE_DEFERRED_TAPE_MASK);
+    PostRobotHSM(event);
+
+    ClearFrontTapeDeferredEvents();
 }
 
 static void PostFoundFrontTape(void)

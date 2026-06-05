@@ -86,7 +86,7 @@ ES_Event RunRobotHSM(ES_Event ThisEvent)
 
     case ShootState:
         if (ThisEvent.EventType == ES_ENTRY) {
-            InitShootingSubHSM();
+            InitShootingSubHSM(NavigateToISZ_GetBoundaryChoice());
         } else {
             ThisEvent = RunShootingSubHSM(ThisEvent);
             if (ThisEvent.EventType == DoneEvent) {

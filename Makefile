@@ -55,7 +55,8 @@ RANLIB=ranlib
 MP_EXTRA_CC_PRE += -I"."
 
 # Command-line helpers:
-#   make ROBOT_DEBUG=1    -> enable state-entry logs
+#   make ROBOT_DEBUG=1    -> enable state-entry + event debug logs
+#   make ROBOT_CHATTY=0   -> silence UART-heavy traces (or -DROBOT_CHATTY_LOGS=0)
 #   make ROBOT_TEST=1     -> enable keyboard event injection and state logs
 #   make MOTOR_SENSOR_TEST=1 -> direct motor/sensor bench harness, no HSM
 #   make MOTOR_SENSOR_TEST=1 IMU_ALIGN_BENCH=1 -> add gyro-zero/jitter-align bench keys
@@ -77,7 +78,9 @@ ifdef MOTOR_SENSOR_TEST
 MP_EXTRA_CC_PRE += -DROBOT_MOTOR_SENSOR_TEST -DROBOT_DEBUG \
     -DROBOT_HW_USE_DRIVE_MOTORS -DROBOT_HW_USE_TAPE \
     -DROBOT_HW_USE_BUMP -DROBOT_HW_USE_BEACON_ADC \
-    -DROBOT_HW_USE_SHOOTER_MOTOR -DROBOT_HW_USE_STEPPER
+    -DROBOT_HW_USE_SHOOTER_MOTOR -DROBOT_HW_USE_STEPPER \
+    -ffunction-sections -fdata-sections
+MP_EXTRA_LD_POST += ,--gc-sections
 endif
 
 ifdef IMU_ALIGN_BENCH

@@ -91,6 +91,7 @@ void RobotStepper_MoveToStep(int16_t targetStep)
 #if ROBOT_PLUGPLAY_USE_STEPPER
     int16_t delta = targetStep - currentStep;
 
+    RobotStepper_Enable();
     if (delta > 0) {
         RobotStepper_Step((uint16_t) delta, TRUE);
     } else if (delta < 0) {

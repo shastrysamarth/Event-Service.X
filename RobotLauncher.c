@@ -17,11 +17,11 @@ typedef struct {
 /* Full-step launcher LUT. NEMA17 is 200 full steps/rev = 1.8 deg/step.
  * [FLAG][#1] Replace these placeholder step targets with measured shots. */
 static const BeaconAimPoint_t BeaconAimLUT[] = {
-    {100u, 1850u, 40},
-    {300u, 1700u, 32},
-    {500u, 1550u, 24},
-    {700u, 1400u, 16},
-    {900u, 1250u, 8},
+    {100u, 1850u, 15},
+    {300u, 1700u, 12},
+    {500u, 1550u, 9},
+    {700u, 1400u, 6},
+    {900u, 1250u, 3},
 };
 
 static uint16_t PulseForBeacon(uint16_t beaconADC);

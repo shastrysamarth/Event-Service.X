@@ -58,6 +58,8 @@ static void LogIMUEvent(ES_EventTyp_t eventType);
 static void LogBeaconInitial(uint16_t raw, uint16_t smoothed);
 static void LogBeaconEvent(ES_EventTyp_t eventType, uint16_t current,
                            uint16_t peak);
+static void LogBeaconPeakUpdate(uint16_t peak);
+static void LogBeaconMinUpdate(uint16_t min);
 static void LogShooterADCInitial(uint16_t raw);
 static void LogTapeInitial(uint8_t sensorNumber, uint8_t raw, uint8_t onTape);
 static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape);
@@ -224,6 +226,8 @@ uint8_t CheckRobotPeriodic(void)
 uint8_t CheckBeaconEvents(void)
 {
     uint16_t current;
+    uint16_t increaseDelta = BEACON_INCREASE_ADC_DELTA;
+    uint16_t decreaseDelta = BEACON_DECREASE_ADC_DELTA;
 
 #if !ROBOT_PLUGPLAY_USE_BEACON_ADC
     return FALSE;
@@ -244,6 +248,12 @@ uint8_t CheckBeaconEvents(void)
         beaconHadIncrease = FALSE;
         beaconAverageReadyLatched = FALSE;
         return FALSE;
+    }
+
+    if (ShootingSubHSM_IsBeaconSearchActive() == TRUE)
+    {
+        increaseDelta = SHOOTING_BEACON_INCREASE_ADC_DELTA;
+        decreaseDelta = SHOOTING_BEACON_DECREASE_ADC_DELTA;
     }
 
     /* Ignore beacon events until the smoothing window is full. During fill the
@@ -269,15 +279,17 @@ uint8_t CheckBeaconEvents(void)
     if (current > peakBeaconADC)
     {
         peakBeaconADC = current;
+        LogBeaconPeakUpdate(peakBeaconADC);
     }
 
     if (current < minBeaconADC)
     {
         minBeaconADC = current;
+        LogBeaconMinUpdate(minBeaconADC);
     }
 
     if ((beaconHadIncrease == FALSE) && 
-        (current >= (minBeaconADC + BEACON_INCREASE_ADC_DELTA)))
+        (current >= (minBeaconADC + increaseDelta)))
     {
         lastBeaconADC = current;
         beaconHadIncrease = TRUE;
@@ -286,7 +298,7 @@ uint8_t CheckBeaconEvents(void)
     }
 
     if ((beaconHadIncrease == TRUE) &&
-        ((current + BEACON_DECREASE_ADC_DELTA) <= peakBeaconADC))
+        ((current + decreaseDelta) <= peakBeaconADC))
     {
         uint16_t peak = peakBeaconADC;
 
@@ -540,6 +552,11 @@ static uint8_t PostEvent(ES_EventTyp_t eventType, uint16_t eventParam)
 
     event.EventType = eventType;
     event.EventParam = eventParam;
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_EVENTS
+    printf("[EVENT] %s param=0x%X\r\n",
+            EventNames[eventType],
+            (unsigned int) eventParam);
+#endif
     return PostRobotHSM(event);
 }
 
@@ -589,7 +606,7 @@ static void LogIMUInitial(void)
 
 static void LogIMUEvent(ES_EventTyp_t eventType)
 {
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_IMU
     printf("[IMU] ");
     PrintFixedValue("headingError", RobotIMU_GetHeadingErrorToZeroDeg(), "deg");
     printf(" ");
@@ -618,7 +635,7 @@ static void LogBeaconInitial(uint16_t raw, uint16_t smoothed)
 static void LogBeaconEvent(ES_EventTyp_t eventType, uint16_t current,
                            uint16_t peak)
 {
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_EVENTS
     printf("[BEACON] smoothed=%u peak=%u distance=%u ft -> %s\r\n",
            (unsigned int)current,
            (unsigned int)peak,
@@ -628,6 +645,24 @@ static void LogBeaconEvent(ES_EventTyp_t eventType, uint16_t current,
     (void)eventType;
     (void)current;
     (void)peak;
+#endif
+}
+
+static void LogBeaconPeakUpdate(uint16_t peak)
+{
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_EVENTS
+    printf("[BEACON] peakBeaconADC=%u\r\n", (unsigned int) peak);
+#else
+    (void) peak;
+#endif
+}
+
+static void LogBeaconMinUpdate(uint16_t min)
+{
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_EVENTS
+    printf("[BEACON] minBeaconADC=%u\r\n", (unsigned int) min);
+#else
+    (void) min;
 #endif
 }
 
@@ -677,7 +712,7 @@ static void LogTapeInitial(uint8_t sensorNumber, uint8_t raw, uint8_t onTape)
 
 static void LogTapeChange(uint8_t sensorNumber, uint8_t raw, uint8_t onTape)
 {
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_TAPE
     printf("[TAPE] sensor%u raw=%u line=%s onTape=%u\r\n",
            (unsigned int)sensorNumber,
            (unsigned int)raw,
@@ -777,7 +812,7 @@ static void LogBumpInitial(uint8_t sensorNumber, uint8_t raw, uint8_t bumped)
 
 static void LogBumpChange(uint8_t sensorNumber, uint8_t raw, uint8_t bumped)
 {
-#if ROBOT_REALTIME_TRACE
+#if (defined(DEBUG) || defined(ROBOT_DEBUG)) && ROBOT_LOG_BUMP
     printf("[BUMP] sensor%u raw=%u line=%s bumped=%u\r\n",
            (unsigned int)sensorNumber,
            (unsigned int)raw,
